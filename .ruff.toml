@@ -1,6 +1,6 @@
 fix = true
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 
 [format]
 # Enable reformatting of code snippets in docstrings.
@@ -45,7 +45,6 @@ ban-relative-imports = "all"
 
 [lint.isort]
 lines-after-imports = 2
-known-first-party = ["tests"]
 
 [lint.pydocstyle]
 convention = "google"

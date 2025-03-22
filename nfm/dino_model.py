@@ -3,15 +3,16 @@ from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer
 from torchmetrics import MetricCollection
 
-from project_name.typing import Input, Outputs
+from nfm.modeling import Criterion
+from nfm.typing import Input, Outputs
 
 
-class ProjectNameModel(LightningModule):
+class DinoModel(LightningModule):
     def __init__(self, backbone: nn.Module, decode_head: nn.Module) -> None:
         super().__init__()
         self.backbone = backbone
         self.decode_head = decode_head
-        self.criterion = ...  # TODO add your loss function
+        self.criterion = Criterion()
 
         self.val_metrics = MetricCollection(
             {...},  # TODO add metrics you want to compute

@@ -1,34 +1,24 @@
 [project]
-name = "project-name"
+name = "nfm"
 version = "0.1.0"
-authors = []
-requires-python = ">=3.11"
+authors = [{ name = "Matěj Pekár", email = "matejpekar@mail.muni.cz" }]
+requires-python = ">=3.12,<3.13"
 readme = "README.md"
 license = { file = "LICENSE" }
 dependencies = [
     "torch>=2.4.0",
     "lightning>=2.4.0",
     "torchmetrics>=1.4.1",
-    "rationai-mlkit @ git+https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/mlkit.git",
+    "rationai-mlkit>=0.2.0",
+    "psutil>=7.0.0",
+    "pynvml>=12.0.0",
 ]
 
-[tool.pdm.dev-dependencies]
-dev = ["mypy", "pre-commit", "ruff"]
+[tool.uv]
+dev-dependencies = ["mypy", "pre-commit", "ruff"]
 
-[tool.pdm.scripts]
-train = "python -m project_name mode=fit"
-validate = "python -m project_name mode=validate"
-test = "python -m project_name mode=test"
-predict = "python -m project_name mode=predict"
-l = { composite = ["lint", "format", "mypy"] }
-lint = "ruff check --fix"
-format = "ruff format"
-mypy = "mypy ."
-post_install = { composite = [
-    "pre-commit autoupdate",
-    "pre-commit install",
-    "pre-commit install --hook-type commit-msg",
-] }
-
-[tool.pdm]
-distribution = false
+[tool.uv.sources]
+rationai-mlkit = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/mlkit.git" }
+rationai-masks = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/masks.git" }
+rationai-tiling = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/tiling.git" }
+rationai-kube-jobs = { git = "ssh://git@gitlab.ics.muni.cz/rationai/digital-pathology/libraries/kube-jobs.git" }
