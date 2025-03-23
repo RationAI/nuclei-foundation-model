@@ -1,8 +1,11 @@
-from typing import TypeAlias
+from torch_geometric.data import Data
+from torch_geometric.transforms import BaseTransform
 
 
-Sample: TypeAlias = ...  # TODO define the type returned by Dataset
+Input: type = ...  # TODO define the model input type
 
-Input: TypeAlias = ...  # TODO define the model input type
+Outputs: type = ...  # TODO define the model output type
 
-Outputs: TypeAlias = ...  # TODO define the model output type
+Transforms: type = list[BaseTransform] | BaseTransform
+
+Sample: type = Data
