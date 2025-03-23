@@ -6,12 +6,18 @@ requires-python = ">=3.12,<3.13"
 readme = "README.md"
 license = { file = "LICENSE" }
 dependencies = [
-    "torch>=2.4.0",
+    "torch==2.5.1",
     "lightning>=2.4.0",
     "torchmetrics>=1.4.1",
     "rationai-mlkit>=0.2.0",
     "psutil>=7.0.0",
     "pynvml>=12.0.0",
+    "torch-geometric>=2.6.1",
+    "pyg-lib>=0.4.0",
+    "torch-scatter>=2.1.2",
+    "torch-sparse>=0.6.18",
+    "torch-cluster>=1.6.3",
+    "torch-spline-conv>=1.2.2",
 ]
 
 [tool.uv]
