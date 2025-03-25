@@ -5,14 +5,15 @@ from pathlib import Path
 import pandas as pd
 import torch
 from mlflow.artifacts import download_artifacts
+from torch import Tensor
 from torch.utils.data import ConcatDataset, Dataset
 from torch_geometric.data import Batch, Data
 from torch_geometric.loader import ClusterData
 
-from nfm.typing import Sample, Transforms
+from nfm.typing import Transforms
 
 
-class ClusterGraph(ConcatDataset[Sample]):
+class ClusterGraph(ConcatDataset[tuple[Tensor, Tensor]]):
     def __init__(
         self,
         metadata_uri: str,
@@ -39,9 +40,9 @@ class ClusterGraph(ConcatDataset[Sample]):
         graphs = list(Path(download_artifacts(graphs_uri)).rglob("*.pt"))
         self.graphs = {graph.stem: graph for graph in graphs}
 
-    def generate_datasets(self) -> Iterable[Dataset[Sample]]:
+    def generate_datasets(self) -> Iterable[Dataset[tuple[Tensor, Tensor]]]:
         return [
-            ClusterDataset(
+            METISClusterDataset(
                 path=self.graphs[slide.slide_id],
                 subgraph_size=self.subgraph_size,
                 pre_transforms=self.pre_transforms,
@@ -50,12 +51,9 @@ class ClusterGraph(ConcatDataset[Sample]):
         ]
 
 
-class ClusterDataset(Dataset[Sample]):
+class METISClusterDataset(Dataset[tuple[Tensor, Tensor]]):
     def __init__(
-        self,
-        path: Path,
-        subgraph_size: int,
-        pre_transforms: Transforms,
+        self, path: Path, subgraph_size: int, pre_transforms: Transforms
     ) -> None:
         """Initialize the dataset.
 
@@ -93,6 +91,5 @@ class ClusterDataset(Dataset[Sample]):
     def __len__(self) -> int:
         return len(self.subgraphs)
 
-    def __getitem__(self, idx: int) -> Sample:
-        data = self.subgraphs.get_example(idx)
-        return data
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
+        return self.subgraphs.get_example(idx)
