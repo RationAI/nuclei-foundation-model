@@ -8,7 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 from rationai.mlkit import Trainer, autolog
 
 from nfm.data import DataModule
-from nfm.dino_model import DinoModel
+from nfm.ssl_meta_arch import SSLMetaArch
 
 
 OmegaConf.register_new_resolver(
@@ -27,7 +27,7 @@ def main(config: DictConfig, logger: Logger | None) -> None:
         _recursive_=False,  # to avoid instantiating all the datasets
         _target_=DataModule,
     )
-    model = hydra.utils.instantiate(config.model, _target_=DinoModel)
+    model = hydra.utils.instantiate(config.model, _target_=SSLMetaArch)
 
     trainer = hydra.utils.instantiate(config.trainer, _target_=Trainer, logger=logger)
     getattr(trainer, config.mode)(model, datamodule=data, ckpt_path=config.checkpoint)
