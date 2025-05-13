@@ -16,6 +16,7 @@ dependencies = [
     "histopath>=0.1.0",
     "albumentations>=2.0.5",
     "timm>=1.0.15",
+    "einops>=0.8.1",
 ]
 
 [tool.uv]
