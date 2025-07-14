@@ -6,7 +6,6 @@ from lightning import LightningModule
 from lightning.pytorch.core.optimizer import LightningOptimizer
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from torch import Tensor, nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.optim import Optimizer
 
 from nfm.configuration import Config
@@ -38,30 +37,6 @@ class SSLMetaArch(LightningModule):
             warmup_iters=30 * self.trainer.num_training_batches,
             start_warmup_value=0.04,
         )
-
-    def optimizer_step(
-        self,
-        epoch: int,
-        batch_idx: int,
-        optimizer: Optimizer | LightningOptimizer,
-        optimizer_closure: Callable[[], Any] | None = None,
-    ) -> None:
-        super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
-
-        m = self.momentum[self.global_step]
-        student_param_list = []
-        teacher_param_list = []
-        with torch.no_grad():
-            for k in self.student:
-                for ms, mt in zip(
-                    FSDP.fsdp_modules(self.student[k]),
-                    FSDP.fsdp_modules(self.teacher[k]),
-                    strict=True,
-                ):
-                    student_param_list += ms.params
-                    teacher_param_list += mt.params
-            torch._foreach_mul_(teacher_param_list, m)
-            torch._foreach_add_(teacher_param_list, student_param_list, alpha=1 - m)
 
     def forward(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         mask_indices_list = batch["mask_indices_list"]
@@ -282,3 +257,19 @@ class SSLMetaArch(LightningModule):
             eta_min=1.0e-06,
         )
         return [optimizer], [scheduler]
+
+    def optimizer_step(
+        self,
+        epoch: int,
+        batch_idx: int,
+        optimizer: Optimizer | LightningOptimizer,
+        optimizer_closure: Callable[[], Any] | None = None,
+    ) -> None:
+        super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
+
+        m = self.momentum[self.global_step]
+        with torch.no_grad():
+            student_params = list(self.student.parameters())
+            teacher_params = list(self.teacher.parameters())
+            torch._foreach_mul_(teacher_params, m)
+            torch._foreach_add_(teacher_params, student_params, alpha=1 - m)
