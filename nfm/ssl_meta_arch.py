@@ -9,13 +9,16 @@ from torch import Tensor, nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.optim import Optimizer
 
+from nfm.configuration import Config
 from nfm.modeling.loss import DINOLoss, KoLeoLoss, iBOTPatchLoss
 from nfm.utils import CosineScheduler
 
 
 class SSLMetaArch(LightningModule):
-    def __init__(self) -> None:
+    def __init__(self, **config: Any) -> None:
         super().__init__()
+        self.config = Config(**config)
+
         self.student = nn.ModuleDict()
         self.teacher = nn.ModuleDict()
 

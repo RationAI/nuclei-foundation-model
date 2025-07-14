@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor, nn
 
+from nfm.configuration import Config
 from nfm.modeling.layers import CayleySTRING, FeedForward
 
 
@@ -19,102 +20,75 @@ def relative_to_absolute_pos(pos: Tensor, step_x: float, step_y: float) -> Tenso
     return torch.stack((absolute_x, absolute_y), dim=-1)
 
 
-class CrossAttention(nn.Module):
+class Attention(nn.Module):
     def __init__(self, dim: int, num_heads: int, dropout: float = 0.0) -> None:
         super().__init__()
-
-        self.num_heads = num_heads
         self.dropout = dropout
+        self.head_dim = dim // num_heads
 
-        self.pe = CayleySTRING(dim, num_heads)
-        self.query = nn.Linear(dim, dim, bias=False)
+        self.rope = CayleySTRING(self.head_dim)
+        self.q = nn.Linear(dim, dim, bias=False)
         self.kv = nn.Linear(dim, dim * 2, bias=False)
         self.wo = nn.Linear(dim, dim, bias=False)
 
     def forward(
-        self, tgt: Tensor, src: Tensor, tgt_coords: Tensor, src_coord: Tensor
+        self, tgt: Tensor, src: Tensor, tgt_pos: Tensor, src_pos: Tensor
     ) -> Tensor:
-        q = rearrange(self.query(tgt), "b n (h d) -> b h n d", h=self.num_heads)
+        q = rearrange(self.q(tgt), "b n (h d) -> b h n d", d=self.head_dim)
         k, v = rearrange(
-            self.kv(src), "b n (two h d) -> two b h n d", two=2, h=self.num_heads
+            self.kv(src), "b n (two h d) -> two b h n d", two=2, d=self.head_dim
         )
+
         x = F.scaled_dot_product_attention(
-            query=self.pe(q, tgt_coords),
-            key=self.pe(k, src_coord),
+            query=self.rope(q, tgt_pos),
+            key=self.rope(k, src_pos),
             value=v,
             dropout_p=self.dropout if self.training else 0.0,
         )
-        tgt = self.wo(rearrange(x, "b h n d -> b n (h d)"))
+        x = rearrange(x, "b h n d -> b n (h d)")
 
-        return tgt
-
-
-class SelfAttention(nn.Module):
-    def __init__(self, dim: int, num_heads: int, dropout: float = 0.0) -> None:
-        super().__init__()
-
-        self.num_heads = num_heads
-        self.dropout = dropout
-
-        self.pe = CayleySTRING(dim, num_heads)
-        self.qkv = nn.Linear(dim, dim * 3, bias=False)
-        self.wo = nn.Linear(dim, dim, bias=False)
-
-    def forward(self, x: Tensor, coords: Tensor) -> Tensor:
-        q, k, v = rearrange(
-            self.qkv(x), "b n (three h d) -> three b h n d", three=3, h=self.num_heads
-        )
-        x = F.scaled_dot_product_attention(
-            query=self.pe(q, coords),
-            key=self.pe(k, coords),
-            value=v,
-            dropout_p=self.dropout if self.training else 0.0,
-        )
-
-        return self.wo(rearrange(x, "b h n d -> b n (h d)"))
+        return self.wo(x)
 
 
 class Layer(nn.Module):
-    def __init__(self, dim: int, num_heads: int) -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__()
 
-        self.cross_attention = CrossAttention(dim, num_heads)
-        self.cross_attention_norm = nn.LayerNorm(dim)
+        self.self_attn = Attention(dim=config.dim, num_heads=config.num_heads)
+        self.cross_attn = Attention(dim=config.dim, num_heads=config.num_heads)
+        self.ffn = FeedForward(config.dim, config.dim * 4)
 
-        self.self_attention = SelfAttention(dim, num_heads)
-        self.self_attention_norm = nn.LayerNorm(dim)
-
-        self.ffn = FeedForward(dim, dim * 4)
-        self.ffn_norm = nn.LayerNorm(dim)
+        self.pre_self_attn_norm = nn.RMSNorm(config.dim)
+        self.pre_cross_attn_norm = nn.RMSNorm(config.dim)
+        self.pre_ffn_norm = nn.RMSNorm(config.dim)
+        self.post_self_attn_norm = nn.RMSNorm(config.dim)
+        self.post_cross_attn_norm = nn.RMSNorm(config.dim)
+        self.post_ffn_norm = nn.RMSNorm(config.dim)
 
     def forward(
-        self, tgt: Tensor, src: Tensor, tgt_coords: Tensor, src_coords: Tensor
+        self, tgt: Tensor, src: Tensor, tgt_pos: Tensor, src_pos: Tensor
     ) -> Tensor:
-        x = self.cross_attention_norm(tgt)
-        tgt = tgt + self.cross_attention(x, src, tgt_coords, src_coords)
+        y = self.pre_cross_attn_norm(tgt)
+        tgt = tgt + self.post_cross_attn_norm(self.cross_attn(y, src, tgt_pos, src_pos))
 
-        x = self.self_attention_norm(tgt)
-        tgt = tgt + self.self_attention(x, tgt_coords)
+        y = self.pre_self_attn_norm(tgt)
+        tgt = tgt + self.post_self_attn_norm(self.self_attn(y, y, tgt_pos, tgt_pos))
 
-        x = self.ffn_norm(tgt)
-        tgt = tgt + self.ffn(x)
-
-        return tgt
+        y = self.pre_ffn_norm(tgt)
+        return tgt + self.post_ffn_norm(self.ffn(y))
 
 
 class Transformer(nn.Module):
-    def __init__(
-        self, dim: int, num_layers: int, num_heads: int, num_classes: int
-    ) -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__()
 
-        self.layers = nn.ModuleList(Layer(dim, num_heads) for _ in range(num_layers))
-        self.class_head = nn.Linear(dim, num_classes)
+        self.layers = nn.ModuleList(Layer(config) for _ in range(config.num_layers))
+        self.class_head = nn.Linear(config.dim, config.num_classes)
 
     def forward(
-        self, tgt: Tensor, src: Tensor, tgt_coords: Tensor, src_coords: Tensor
+        self, tgt: Tensor, src: Tensor, tgt_pos: Tensor, src_pos: Tensor
     ) -> dict[str, Tensor]:
         for layer in self.layers:
-            tgt = layer(tgt=tgt, src=src, tgt_coords=tgt_coords, src_coords=src_coords)
+            tgt = layer(tgt, src, tgt_pos, src_pos)
 
         return {"logits": self.class_head(tgt)}

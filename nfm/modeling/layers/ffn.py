@@ -3,26 +3,14 @@ from torch import Tensor, nn
 
 
 class FeedForward(nn.Module):
-    """FeedForward module.
+    """GeGLU."""
 
-    Taken from https://github.com/meta-llama/llama-models/blob/main/models/llama4/ffn.py
-    """
-
-    def __init__(self, dim: int, hidden_dim: int, multiple_of: int = 256) -> None:
-        """Initialize the FeedForward module.
-
-        Args:
-            dim (int): Input dimension.
-            hidden_dim (int): Hidden dimension of the feedforward layer.
-            multiple_of (int): Value to ensure hidden dimension is a multiple of this value.
-        """
+    def __init__(self, dim: int, hidden_dim: int) -> None:
         super().__init__()
-        hidden_dim = int(2 * hidden_dim / 3)
-        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-
-        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
-        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+        self.gating_proj = nn.Linear(dim, 2 * hidden_dim, bias=False)
+        self.down_proj = nn.Linear(hidden_dim, dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+        gate, up = self.gating_proj(x).chunk(2, dim=-1)
+        outputs = F.gelu(gate) * up
+        return self.down_proj(outputs)
