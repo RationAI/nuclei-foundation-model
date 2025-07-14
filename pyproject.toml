@@ -18,6 +18,7 @@ dependencies = [
     "timm>=1.0.15",
     "einops>=0.8.1",
     "transformers>=4.53.0",
+    "deepspeed>=0.17.2",
 ]
 
 [tool.uv]
@@ -25,7 +26,4 @@ dev-dependencies = ["mypy", "pre-commit", "ruff"]
 
 [tool.uv.sources]
 rationai-mlkit = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/mlkit.git" }
-rationai-masks = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/masks.git" }
-rationai-tiling = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/tiling.git" }
-rationai-kube-jobs = { git = "ssh://git@gitlab.ics.muni.cz/rationai/digital-pathology/libraries/kube-jobs.git" }
 histopath = { git = "https://github.com/RationAI/histopath.git", branch = "tiling" }
