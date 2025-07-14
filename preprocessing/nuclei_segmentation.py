@@ -212,12 +212,14 @@ if __name__ == "__main__":
     ).map(row_hash, num_cpus=0.1, memory=300 * 1024 * 1024)
     slides.write_parquet("slides")
 
-    tiles = slides.flat_map(tiling).repartition(target_num_rows_per_block=200)
+    tiles = slides.flat_map(tiling, num_cpus=0.2, memory=300 * 1024 * 1024).repartition(
+        target_num_rows_per_block=200
+    )
     tissue_tiles = tiles.map(openslide_tile_reader, memory=300 * 1024 * 1024).filter(
         filter_tissue
     )
     nuclei = tissue_tiles.map_batches(
-        Model, num_gpus=1, num_cpus=0, batch_size=2, concurrency=1
+        Model, num_gpus=1, num_cpus=0, batch_size=20, concurrency=1
     )
     aggregated = nuclei.groupby("id").aggregate(SlideNucleiAggregator())
     aggregated.flat_map(write_format).write_datasink(
