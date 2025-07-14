@@ -11,13 +11,13 @@ from histopath.tiling.openslide_tile_reader import openslide_tile_reader
 from histopath.tiling.utils import row_hash
 from numpy.typing import NDArray
 from ray.data._internal.datasource.parquet_datasink import ParquetDatasink
-from ray.data.aggregate import AggregateFnV2
 from ray.data.block import Block, BlockAccessor
 from ray.data.datasource import FilenameProvider
 from shapely import Polygon, STRtree
 from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
 
+PATH = ""
 TILE_EXTENT = 1024
 OVERLAP = 64
 STRIDE = TILE_EXTENT - OVERLAP
@@ -74,91 +74,6 @@ class Datasink(ParquetDatasink):
                 writer.write_table(table, row_group_size=row_group_size)
 
 
-class SlideNucleiAggregator(AggregateFnV2):
-    def __init__(self) -> None:
-        super().__init__(name="nuclei", on=None, zero_factory=list, ignore_nulls=True)
-
-    def combine(
-        self, current_accumulator: list[Nuclei], new: list[Nuclei]
-    ) -> list[Nuclei]:
-        center_nuclei = [n for n in new if not n["is_edge"]]
-        edge_nuclei = [n for n in new if n["is_edge"]]
-        keys = [n for n in current_accumulator if n["is_edge"]]
-        return current_accumulator + center_nuclei + self._resolve(edge_nuclei, keys)
-
-    def aggregate_block(self, block: Block) -> list[Nuclei]:
-        center_nuclei: list[Nuclei] = []
-        edge_nuclei: list[Nuclei] = []
-
-        block_acc = BlockAccessor.for_block(block)
-        for row in block_acc.iter_rows(public_row_format=False):
-            offset = np.array((row["tile_x"], row["tile_y"]), dtype=np.float32)
-            for i, polygon in enumerate(row["polygons"]):
-                if not Polygon(polygon).is_valid:
-                    continue
-
-                if (is_center := self._clasify_nucleus_location(polygon)) is None:
-                    continue
-
-                polygon += offset
-                (center_nuclei if is_center else edge_nuclei).append(
-                    {
-                        "slide_id": row["id"],
-                        "polygon": polygon,
-                        "embedding": row["embeddings"][i],
-                        "centroid": polygon.mean(axis=0),
-                        "is_edge": not is_center,
-                    }
-                )
-
-        return center_nuclei + self._resolve(
-            edge_nuclei, edge_nuclei, self_resolve=True
-        )
-
-    def _clasify_nucleus_location(self, polygon: NDArray[np.float32]) -> bool | None:
-        """Classifies a nucleus based on its location within a tile.
-
-        Returns:
-            - True: If the nucleus is fully within the tile's core (non-overlap) area.
-            - False: If the nucleus is within the tile's edge (overlap) area.
-            - None: If the nucleus should be discarded (e.g., outside tile bounds).
-        """
-        min = polygon.min(axis=0)
-        max = polygon.max(axis=0)
-
-        if np.any(min < 0) or np.any(max >= TILE_EXTENT):
-            if np.any(max >= OVERLAP) or np.any(min < TILE_EXTENT - OVERLAP):
-                return False
-            return None
-
-        return np.all(max >= OVERLAP) and np.all(min < TILE_EXTENT - OVERLAP)
-
-    def _resolve(
-        self, queries: list[Nuclei], keys: list[Nuclei], self_resolve: bool = False
-    ) -> list[Nuclei]:
-        unique: list[Nuclei] = []
-
-        tree = STRtree([Polygon(nucleus["polygon"]) for nucleus in keys])
-        for i, nucleus in enumerate(queries):
-            query = Polygon(nucleus["polygon"])
-            is_duplicate = False
-
-            for key_idx in tree.query(query, predicate="intersects"):
-                if self_resolve and i <= key_idx:
-                    continue
-
-                key = tree.geometries.take(key_idx)
-                iou = query.intersection(key).area / query.union(key).area
-                if iou > 0.8:
-                    is_duplicate = True
-                    break
-
-            if not is_duplicate:
-                unique.append(nucleus)
-
-        return unique
-
-
 class Model:
     device = "cuda"
 
@@ -202,13 +117,85 @@ def filter_tissue(row: dict[str, Any]) -> bool:
     return row["tile"].std() > 8
 
 
-def write_format(row: dict[str, Any]) -> dict[str, Any]:
-    return row["nuclei"]
+def aggregate_nuclei(block: Block) -> dict[str, Any]:
+    def clasify_nucleus_location(polygon: NDArray[np.float32]) -> bool | None:
+        """Classifies a nucleus based on its location within a tile.
+
+        Returns:
+            - True: If the nucleus is fully within the tile's core (non-overlap) area.
+            - False: If the nucleus is within the tile's edge (overlap) area.
+            - None: If the nucleus should be discarded (e.g., outside tile bounds).
+        """
+        min = polygon.min(axis=0)
+        max = polygon.max(axis=0)
+
+        if np.any(min < 0) or np.any(max >= TILE_EXTENT):
+            if np.any(max >= OVERLAP) or np.any(min < TILE_EXTENT - OVERLAP):
+                return False
+            return None
+
+        return np.all(max >= OVERLAP) and np.all(min < TILE_EXTENT - OVERLAP)
+
+    unique = {
+        "slide_id": [],
+        "polygons": [],
+        "embeddings": [],
+        "centroids": [],
+    }
+    candidate = []
+
+    block_acc = BlockAccessor.for_block(block)
+    for row in block_acc.iter_rows(public_row_format=False):
+        offset = np.array((row["tile_x"], row["tile_y"]), dtype=np.float32)
+        for i, polygon in enumerate(row["polygons"]):
+            if not Polygon(polygon).is_valid:
+                continue
+
+            if (is_center := clasify_nucleus_location(polygon)) is None:
+                continue
+
+            polygon = polygon + offset
+            if is_center:
+                unique["slide_id"].append(row["id"])
+                unique["polygons"].append(polygon)
+                unique["embeddings"].append(row["embeddings"][i])
+                unique["centroids"].append(polygon.mean(axis=0))
+            else:
+                candidate.append(
+                    {
+                        "slide_id": row["id"],
+                        "polygon": polygon,
+                        "embedding": row["embeddings"][i],
+                    }
+                )
+
+    polygons = [Polygon(nucleus["polygon"]) for nucleus in candidate]
+    tree = STRtree(polygons)
+    for i, query in enumerate(polygons):
+        is_duplicate = False
+
+        for key_idx in tree.query(query, predicate="intersects"):
+            if i <= key_idx:
+                continue
+
+            key = tree.geometries.take(key_idx)
+            iou = query.intersection(key).area / query.union(key).area
+            if iou > 0.8:
+                is_duplicate = True
+                break
+
+        if not is_duplicate:
+            unique["slide_id"].append(candidate[i]["slide_id"])
+            unique["polygons"].append(candidate[i]["polygon"])
+            unique["embeddings"].append(candidate[i]["embedding"])
+            unique["centroids"].append(candidate[i]["polygon"].mean(axis=0))
+
+    return unique
 
 
 if __name__ == "__main__":
     slides = ray.data.read_datasource(
-        OpenSlideMetaDatasource("", mpp=0.25, tile_extent=TILE_EXTENT, stride=STRIDE)
+        OpenSlideMetaDatasource(PATH, mpp=0.25, tile_extent=TILE_EXTENT, stride=STRIDE)
     ).map(row_hash, num_cpus=0.1, memory=300 * 1024 * 1024)
     slides.write_parquet("slides")
 
@@ -221,8 +208,10 @@ if __name__ == "__main__":
     nuclei = tissue_tiles.map_batches(
         Model, num_gpus=1, num_cpus=0, batch_size=20, concurrency=1
     )
-    aggregated = nuclei.groupby("id").aggregate(SlideNucleiAggregator())
-    aggregated.flat_map(write_format).write_datasink(
+    aggregated = nuclei.groupby("id").map_groups(
+        aggregate_nuclei, batch_format=None, memory=1024 * 1024 * 1024
+    )
+    aggregated.write_datasink(
         Datasink(
             "nuclei", ignore_cols="slide_id", filename_provider=SlideFilenameProvider()
         )
