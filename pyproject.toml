@@ -19,6 +19,7 @@ dependencies = [
     "einops>=0.8.1",
     "transformers>=4.53.0",
     "deepspeed>=0.17.2",
+    "shapely>=2.1.1",
 ]
 
 [tool.uv]
