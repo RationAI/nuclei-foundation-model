@@ -12,7 +12,7 @@ from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
 
 PATH = ""
-TILE_EXTENT = 1024
+TILE_EXTENT = 2048
 OVERLAP = 64
 STRIDE = TILE_EXTENT - OVERLAP
 
@@ -68,19 +68,29 @@ def filter_tissue(row: dict[str, Any]) -> bool:
     return row["tile"].std() > 8
 
 
-def drop_duplicates(row: dict[str, Any]) -> dict[str, Any]:
+def drop_duplicates(row: dict[str, Any]) -> list[dict[str, Any]]:
     centroids = row["polygons"].min(axis=1)
+
     keep = np.all(centroids >= OVERLAP / 2, axis=-1) & np.all(
         centroids < TILE_EXTENT - OVERLAP / 2, axis=-1
     )
 
     offset = np.array((row["tile_x"], row["tile_y"]), dtype=np.float32)
-    return {
-        "slide_id": row["id"],
-        "polygons": row["polygons"][keep] + offset,
-        "embeddings": row["embeddings"][keep],
-        "centroids": centroids[keep] + offset,
-    }
+    polygons = row["polygons"][keep] + offset
+    embeddings = row["embeddings"][keep]
+    centroids = centroids[keep] + offset
+
+    return [
+        {
+            "slide_id": row["id"],
+            "polygon": polygon,
+            "embedding": embedding,
+            "centroid": centroid,
+        }
+        for polygon, embedding, centroid in zip(
+            polygons, embeddings, centroids, strict=True
+        )
+    ]
 
 
 if __name__ == "__main__":
@@ -98,6 +108,6 @@ if __name__ == "__main__":
     nuclei = tissue_tiles.map_batches(
         Model, num_gpus=1, num_cpus=0, batch_size=20, concurrency=1
     )
-    nuclei.map(drop_duplicates, num_cpus=0.1, memory=300 * 1024 * 1024).write_parquet(
-        "nuclei", partition_cols=["slide_id"]
-    )
+    nuclei.flat_map(
+        drop_duplicates, num_cpus=0.1, memory=300 * 1024 * 1024
+    ).write_parquet("nuclei", partition_cols=["slide_id"])
