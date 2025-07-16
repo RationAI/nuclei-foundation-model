@@ -106,7 +106,12 @@ if __name__ == "__main__":
         openslide_tile_reader, num_cpus=0.25, memory=300 * 1024 * 1024
     ).filter(filter_tissue)
     nuclei = tissue_tiles.map_batches(
-        Model, num_gpus=1, num_cpus=0, batch_size=20, concurrency=1
+        Model,
+        num_gpus=1,
+        num_cpus=0,
+        batch_size=20,
+        memory=300 * 1024 * 1024,
+        concurrency=8,
     )
     nuclei.flat_map(
         drop_duplicates, num_cpus=0.1, memory=300 * 1024 * 1024
