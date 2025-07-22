@@ -12,5 +12,5 @@ class FeedForward(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         gate, up = self.gating_proj(x).chunk(2, dim=-1)
-        outputs = F.gelu(gate) * up
+        outputs = F.gelu(gate, approximate="tanh") * up
         return self.down_proj(outputs)
