@@ -1,4 +1,4 @@
-from typing import Any, TypedDict
+from typing import Any
 
 import numpy as np
 import ray
@@ -7,7 +7,6 @@ from histopath.ray.datasource import OpenSlideMetaDatasource
 from histopath.tiling import grid_tiles
 from histopath.tiling.openslide_tile_reader import openslide_tile_reader
 from histopath.tiling.utils import row_hash
-from numpy.typing import NDArray
 from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
 
@@ -15,14 +14,6 @@ PATH = ""
 TILE_EXTENT = 2048
 OVERLAP = 64
 STRIDE = TILE_EXTENT - OVERLAP
-
-
-class Nuclei(TypedDict):
-    slide_id: str
-    polygon: NDArray[np.float32]
-    centroid: NDArray[np.float32]
-    embedding: NDArray[np.float32]
-    is_edge: bool
 
 
 class Model:
@@ -96,23 +87,23 @@ def drop_duplicates(row: dict[str, Any]) -> list[dict[str, Any]]:
 if __name__ == "__main__":
     slides = ray.data.read_datasource(
         OpenSlideMetaDatasource(PATH, mpp=0.25, tile_extent=TILE_EXTENT, stride=STRIDE)
-    ).map(row_hash, num_cpus=0.1, memory=300 * 1024 * 1024)
+    ).map(row_hash, num_cpus=0.1, memory=128 * 1024 * 1024)
     slides.write_parquet("slides")
 
-    tiles = slides.flat_map(tiling, num_cpus=0.2, memory=300 * 1024 * 1024).repartition(
+    tiles = slides.flat_map(tiling, num_cpus=0.2, memory=128 * 1024 * 1024).repartition(
         target_num_rows_per_block=200
     )
     tissue_tiles = tiles.map(
-        openslide_tile_reader, num_cpus=0.25, memory=300 * 1024 * 1024
-    ).filter(filter_tissue)
+        openslide_tile_reader, num_cpus=1, memory=3 * 1024 * 1024 * 1024
+    ).filter(filter_tissue, memory=1.5 * 1024 * 1024 * 1024)
     nuclei = tissue_tiles.map_batches(
         Model,
         num_gpus=1,
         num_cpus=0,
         batch_size=20,
-        memory=300 * 1024 * 1024,
+        memory=3 * 1024 * 1024 * 1024,
         concurrency=8,
     )
     nuclei.flat_map(
-        drop_duplicates, num_cpus=0.1, memory=300 * 1024 * 1024
+        drop_duplicates, num_cpus=0.1, memory=1.5 * 1024 * 1024 * 1024
     ).write_parquet("nuclei", partition_cols=["slide_id"])
