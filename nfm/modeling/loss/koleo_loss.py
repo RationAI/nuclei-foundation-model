@@ -16,14 +16,15 @@ class KoLeoLoss(nn.Module):
 
     def __init__(self) -> None:
         super().__init__()
-        self.pdist = nn.PairwiseDistance(2, eps=1e-8)
+        self.pdist = nn.PairwiseDistance(p=2, eps=1e-8)
 
     def pairwise_nns_inner(self, x: Tensor) -> Tensor:
         """Pairwise nearest neighbors for L2-normalized vectors."""
         dots = x @ x.T  # parwise dot products (= inverse distance)
         dots.fill_diagonal_(-1)
-        return torch.max(dots, dim=1)[1]  # max inner prod -> min distance
+        return torch.max(dots, dim=1).indices  # max inner prod -> min distance
 
+    @torch.autocast("cuda", enabled=False)
     def forward(self, student_output: Tensor, eps: float = 1e-8) -> Tensor:
         """Compute the KoLeo loss.
 

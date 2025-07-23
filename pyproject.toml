@@ -27,4 +27,3 @@ dev-dependencies = ["mypy", "pre-commit", "ruff"]
 
 [tool.uv.sources]
 rationai-mlkit = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/mlkit.git" }
-histopath = { git = "https://github.com/RationAI/histopath.git", branch = "tiling" }
