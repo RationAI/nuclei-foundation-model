@@ -4,6 +4,7 @@
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from einops import rearrange
 from torch import Tensor, nn
 
 
@@ -57,3 +58,18 @@ class DINOLoss(nn.Module):
             for t in teacher_out_softmaxed_centered_list:
                 total_loss -= torch.sum(t * lsm, dim=-1).mean()
         return total_loss
+
+    def forward(
+        self,
+        student_output: Tensor,
+        teacher_out_softmaxed_centered: Tensor,
+    ) -> Tensor:
+        """Cross-entropy between softmax outputs of the teacher and student networks."""
+        lsm = F.log_softmax(student_output / self.student_temp, dim=-1)
+        lsm = rearrange(lsm, "ns b d -> ns 1 b d")
+        teacher_out_softmaxed_centered = rearrange(
+            teacher_out_softmaxed_centered, "nt b d -> 1 nt b d"
+        )
+
+        loss = -torch.sum(teacher_out_softmaxed_centered * lsm, dim=-1)
+        return loss.mean()
