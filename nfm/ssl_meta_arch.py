@@ -5,25 +5,64 @@ import torch
 from lightning import LightningModule
 from lightning.pytorch.core.optimizer import LightningOptimizer
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
+from omegaconf import DictConfig
 from torch import Tensor, nn
 from torch.optim import Optimizer
 
 from nfm.configuration import Config
+from nfm.modeling.dino_head import DINOHead
 from nfm.modeling.loss import DINOLoss, KoLeoLoss, iBOTPatchLoss
+from nfm.modeling.transformer import Transformer
 from nfm.utils import CosineScheduler
 
 
 class SSLMetaArch(LightningModule):
-    def __init__(self, **config: Any) -> None:
+    def __init__(self, dino: DictConfig, ibot: DictConfig, **config: Any) -> None:
         super().__init__()
         self.config = Config(**config)
 
-        self.student = nn.ModuleDict()
-        self.teacher = nn.ModuleDict()
+        self.student = nn.ModuleDict(
+            {
+                "backbone": Transformer(self.config),
+                "dino_head": DINOHead(
+                    input_dim=self.config.dim,
+                    hidden_dim=dino.hidden_dim,
+                    bottleneck_dim=dino.bottleneck_dim,
+                    output_dim=dino.num_prototypes,
+                    num_layers=3,
+                ),
+                "ibot_head": DINOHead(
+                    input_dim=self.config.dim,
+                    hidden_dim=ibot.hidden_dim,
+                    bottleneck_dim=ibot.bottleneck_dim,
+                    output_dim=ibot.num_prototypes,
+                    num_layers=3,
+                ),
+            }
+        )
+        self.teacher = nn.ModuleDict(
+            {
+                "backbone": Transformer(self.config),
+                "dino_head": DINOHead(
+                    input_dim=self.config.dim,
+                    hidden_dim=dino.hidden_dim,
+                    bottleneck_dim=dino.bottleneck_dim,
+                    output_dim=dino.num_prototypes,
+                    num_layers=3,
+                ),
+                "ibot_head": DINOHead(
+                    input_dim=self.config.dim,
+                    hidden_dim=ibot.hidden_dim,
+                    bottleneck_dim=ibot.bottleneck_dim,
+                    output_dim=ibot.num_prototypes,
+                    num_layers=3,
+                ),
+            }
+        )
 
         self.dino_loss = DINOLoss()
         self.koleo_loss = KoLeoLoss()
-        self.ibot_patch_loss = iBOTPatchLoss()
+        self.ibot_patch_loss = iBOTPatchLoss(patch_out_dim=self.config.dim)
 
         self.momentum = CosineScheduler(
             base_value=0.994,
@@ -109,15 +148,15 @@ class SSLMetaArch(LightningModule):
     @torch.no_grad()
     def teacher_forward(self, global_crops: Tensor) -> tuple[Tensor, Tensor]:
         n_global_crops = len(global_crops)
-        output = self.teacher(global_crops)
+        embbed = self.teacher.backbone(global_crops)
 
         # dino
-        cls_tokens = output["cls_token"].chunk(n_global_crops)
+        cls_tokens = outputs["cls_token"].chunk(n_global_crops)
         cls_tokens = torch.cat((cls_tokens[1], cls_tokens[0]))
         # watch out: these are chunked and cat'd in reverse so A is matched to B in the global crops dino loss
 
         # iBOT
-        ibot_teacher_patch_tokens = output["x_norm_patchtokens"]
+        ibot_teacher_patch_tokens = outputs["x_norm_patchtokens"]
         _dim = ibot_teacher_patch_tokens.shape[-1]
         buffer_tensor_teacher = ibot_teacher_patch_tokens.new_zeros(upperbound, _dim)
         torch.index_select(
