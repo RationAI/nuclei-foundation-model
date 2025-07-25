@@ -26,7 +26,7 @@ class Attention(nn.Module):
         self.dropout = dropout
         self.head_dim = dim // num_heads
 
-        self.rope = CayleySTRING(self.head_dim)
+        self.rope = CayleySTRING(self.head_dim, theta=10000)
         self.q = nn.Linear(dim, dim, bias=False)
         self.kv = nn.Linear(dim, dim * 2, bias=False)
         self.wo = nn.Linear(dim, dim, bias=False)
@@ -56,7 +56,7 @@ class Layer(nn.Module):
 
         self.self_attn = Attention(dim=config.dim, num_heads=config.num_heads)
         self.cross_attn = Attention(dim=config.dim, num_heads=config.num_heads)
-        self.ffn = FeedForward(config.dim, config.dim * 4)
+        self.ffn = FeedForward(config.dim, config.hidden_dim)
 
         self.pre_self_attn_norm = nn.RMSNorm(config.dim)
         self.pre_cross_attn_norm = nn.RMSNorm(config.dim)
@@ -83,12 +83,12 @@ class Transformer(nn.Module):
         super().__init__()
 
         self.layers = nn.ModuleList(Layer(config) for _ in range(config.num_layers))
-        self.class_head = nn.Linear(config.dim, config.num_classes)
+        self.final_norm = nn.RMSNorm(config.dim)
 
     def forward(
         self, tgt: Tensor, src: Tensor, tgt_pos: Tensor, src_pos: Tensor
-    ) -> dict[str, Tensor]:
+    ) -> Tensor:
         for layer in self.layers:
             tgt = layer(tgt, src, tgt_pos, src_pos)
 
-        return {"logits": self.class_head(tgt)}
+        return self.final_norm(tgt)

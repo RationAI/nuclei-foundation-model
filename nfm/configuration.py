@@ -1,3 +1,5 @@
+from typing import Any
+
 from transformers import PretrainedConfig
 
 
@@ -10,12 +12,10 @@ class Config(PretrainedConfig):
         hidden_dim: int = 384 * 4,
         num_heads: int = 12,
         num_layers: int = 24,
-        num_classes: int = 1000,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         self.dim = dim
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         self.num_layers = num_layers
-        self.num_classes = num_classes
         super().__init__(**kwargs)
