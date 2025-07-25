@@ -8,8 +8,6 @@ mode: ???
 checkpoint: null
 
 trainer:
-  strategy: deepspeed_stage_2
-  num_nodes: 2
   precision: bf16
   gradient_clip_val: 0.1
 
