@@ -15,7 +15,17 @@ trainer:
 
 data: {}
 
-model: {}
+model:
+  dino:
+    num_prototypes: 65536
+    bottleneck_dim: 256
+    num_layers: 3
+    hidden_dim: 2048
+  ibot:
+    num_prototypes: 65536
+    bottleneck_dim: 256
+    num_layers: 3
+    hidden_dim: 2048
 
 metadata:
   experiment_name: ???

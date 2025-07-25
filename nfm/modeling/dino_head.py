@@ -8,7 +8,7 @@ class DINOHead(nn.Module):
         input_dim: int,
         hidden_dim: int,
         bottleneck_dim: int,
-        output_dim: int,
+        num_prototypes: int,
         num_layers: int,
         act_layer: type[nn.Module] = nn.GELU,
     ) -> None:
@@ -28,7 +28,7 @@ class DINOHead(nn.Module):
         self.apply(self.init_weights)
 
         self.last_layer = nn.utils.weight_norm(
-            nn.Linear(bottleneck_dim, output_dim, bias=False)
+            nn.Linear(bottleneck_dim, num_prototypes, bias=False)
         )
         self.last_layer.weight_g.data.fill_(1)
 

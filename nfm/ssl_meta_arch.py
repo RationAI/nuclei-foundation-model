@@ -24,39 +24,15 @@ class SSLMetaArch(LightningModule):
         self.student = nn.ModuleDict(
             {
                 "backbone": Transformer(self.config),
-                "dino_head": DINOHead(
-                    input_dim=self.config.dim,
-                    hidden_dim=dino.hidden_dim,
-                    bottleneck_dim=dino.bottleneck_dim,
-                    output_dim=dino.num_prototypes,
-                    num_layers=3,
-                ),
-                "ibot_head": DINOHead(
-                    input_dim=self.config.dim,
-                    hidden_dim=ibot.hidden_dim,
-                    bottleneck_dim=ibot.bottleneck_dim,
-                    output_dim=ibot.num_prototypes,
-                    num_layers=3,
-                ),
+                "dino_head": DINOHead(input_dim=self.config.dim, **dino),
+                "ibot_head": DINOHead(input_dim=self.config.dim, **ibot),
             }
         )
         self.teacher = nn.ModuleDict(
             {
                 "backbone": Transformer(self.config),
-                "dino_head": DINOHead(
-                    input_dim=self.config.dim,
-                    hidden_dim=dino.hidden_dim,
-                    bottleneck_dim=dino.bottleneck_dim,
-                    output_dim=dino.num_prototypes,
-                    num_layers=3,
-                ),
-                "ibot_head": DINOHead(
-                    input_dim=self.config.dim,
-                    hidden_dim=ibot.hidden_dim,
-                    bottleneck_dim=ibot.bottleneck_dim,
-                    output_dim=ibot.num_prototypes,
-                    num_layers=3,
-                ),
+                "dino_head": DINOHead(input_dim=self.config.dim, **dino),
+                "ibot_head": DINOHead(input_dim=self.config.dim, **ibot),
             }
         )
 
@@ -64,18 +40,20 @@ class SSLMetaArch(LightningModule):
         self.koleo_loss = KoLeoLoss()
         self.ibot_patch_loss = iBOTPatchLoss(patch_out_dim=self.config.dim)
 
-        self.momentum = CosineScheduler(
-            base_value=0.994,
-            final_value=1,
-            total_iters=self.trainer.max_epochs * self.trainer.num_training_batches,
-        )
-        self.teacher_temp = CosineScheduler(
-            base_value=0.07,
-            final_value=0.07,
-            total_iters=30 * self.trainer.num_training_batches,
-            warmup_iters=30 * self.trainer.num_training_batches,
-            start_warmup_value=0.04,
-        )
+    def setup(self, stage: str) -> None:
+        if stage == "fit":
+            self.momentum = CosineScheduler(
+                base_value=0.994,
+                final_value=1,
+                total_iters=self.trainer.max_epochs * self.trainer.num_training_batches,
+            )
+            self.teacher_temp = CosineScheduler(
+                base_value=0.07,
+                final_value=0.07,
+                total_iters=30 * self.trainer.num_training_batches,
+                warmup_iters=30 * self.trainer.num_training_batches,
+                start_warmup_value=0.04,
+            )
 
     def forward(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         mask_indices_list = batch["mask_indices_list"]
@@ -306,6 +284,7 @@ class SSLMetaArch(LightningModule):
     ) -> None:
         super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
 
+        # update teacher with EMA
         m = self.momentum[self.global_step]
         with torch.no_grad():
             student_params = list(self.student.parameters())
