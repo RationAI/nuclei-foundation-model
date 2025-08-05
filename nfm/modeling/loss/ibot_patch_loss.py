@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 
+# ruff: noqa: N801
 class iBOTPatchLoss(nn.Module):
     def __init__(
         self,

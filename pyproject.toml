@@ -20,6 +20,7 @@ dependencies = [
     "transformers>=4.53.0",
     "deepspeed>=0.17.2",
     "shapely>=2.1.1",
+    "graph_pytorch_ext",
 ]
 
 [tool.uv]
@@ -27,3 +28,4 @@ dev-dependencies = ["mypy", "pre-commit", "ruff"]
 
 [tool.uv.sources]
 rationai-mlkit = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/mlkit.git" }
+graph_pytorch_ext = { path = "lib/graph_pytorch_ext" }

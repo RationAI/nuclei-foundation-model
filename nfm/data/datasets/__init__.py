@@ -1,4 +1,4 @@
-from nfm.data.datasets.cluster_graph import ClusterGraph
+from nfm.data.datasets.nuclei_dataset import NucleiDataset
 
 
-__all__ = ["ClusterGraph"]
+__all__ = ["NucleiDataset"]
