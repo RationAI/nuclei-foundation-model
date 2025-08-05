@@ -1,3 +1,4 @@
+# ruff: noqa: F821
 from collections.abc import Callable
 from typing import Any
 
