@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, repeat
 from torch import Tensor, nn
 
 from nfm.configuration import Config
@@ -50,7 +50,7 @@ class Attention(nn.Module):
         return self.wo(x)
 
 
-class Layer(nn.Module):
+class CrossLayer(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
 
@@ -61,34 +61,81 @@ class Layer(nn.Module):
         self.pre_self_attn_norm = nn.RMSNorm(config.dim)
         self.pre_cross_attn_norm = nn.RMSNorm(config.dim)
         self.pre_ffn_norm = nn.RMSNorm(config.dim)
-        self.post_self_attn_norm = nn.RMSNorm(config.dim)
-        self.post_cross_attn_norm = nn.RMSNorm(config.dim)
-        self.post_ffn_norm = nn.RMSNorm(config.dim)
 
     def forward(
         self, tgt: Tensor, src: Tensor, tgt_pos: Tensor, src_pos: Tensor
     ) -> Tensor:
         y = self.pre_cross_attn_norm(tgt)
-        tgt = tgt + self.post_cross_attn_norm(self.cross_attn(y, src, tgt_pos, src_pos))
+        tgt = tgt + self.cross_attn(y, src, tgt_pos, src_pos)
 
         y = self.pre_self_attn_norm(tgt)
-        tgt = tgt + self.post_self_attn_norm(self.self_attn(y, y, tgt_pos, tgt_pos))
+        tgt = tgt + self.self_attn(y, y, tgt_pos, tgt_pos)
 
         y = self.pre_ffn_norm(tgt)
-        return tgt + self.post_ffn_norm(self.ffn(y))
+        return tgt + self.ffn(y)
+
+
+class Layer(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+
+        self.self_attn = Attention(dim=config.dim, num_heads=config.num_heads)
+        self.ffn = FeedForward(config.dim, config.hidden_dim)
+
+        self.pre_self_attn_norm = nn.RMSNorm(config.dim)
+        self.pre_ffn_norm = nn.RMSNorm(config.dim)
+
+    def forward(self, x: Tensor, pos: Tensor) -> Tensor:
+        y = self.pre_self_attn_norm(x)
+        x = x + self.self_attn(y, y, pos, pos)
+
+        y = self.pre_ffn_norm(x)
+        return x + self.ffn(y)
 
 
 class Transformer(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
 
-        self.layers = nn.ModuleList(Layer(config) for _ in range(config.num_layers))
+        self.cross_layers = nn.ModuleList(
+            CrossLayer(config) for _ in range(config.num_cross_layers)
+        )
+        self.self_layers = nn.ModuleList(
+            Layer(config) for _ in range(config.num_self_layers)
+        )
+        self.cls_token = nn.Parameter(torch.randn(config.dim))
         self.final_norm = nn.RMSNorm(config.dim)
 
     def forward(
         self, tgt: Tensor, src: Tensor, tgt_pos: Tensor, src_pos: Tensor
-    ) -> Tensor:
-        for layer in self.layers:
+    ) -> dict[str, Tensor]:
+        """Forward pass of the Transformer model.
+
+        Args:
+            tgt: Target sequence of shape (b, n, d)
+            src: Source sequence of shape (b, m, d)
+            tgt_pos: Target positions of shape (b, n, 2)
+            src_pos: Source positions of shape (b, m, 2)
+
+        Returns:
+            A dictionary containing:
+                - "cls_token": The class token of shape (b, d)
+                - "patch_tokens": The patch tokens of shape (b, n, d)
+        """
+        cls_tokens = repeat(self.cls_token, "d -> b 1 d", b=tgt.shape[0])
+        tgt = torch.cat((cls_tokens, tgt), dim=1)
+        tgt_pos = torch.cat((torch.zeros_like(tgt_pos[:, :1]), tgt_pos), dim=1)
+
+        for layer in self.cross_layers:
             tgt = layer(tgt, src, tgt_pos, src_pos)
 
-        return self.final_norm(tgt)
+        for layer in self.self_layers:
+            tgt = layer(tgt, tgt_pos)
+
+        # Final normalization
+        tgt = self.final_norm(tgt)
+
+        return {
+            "cls_token": tgt[:, 0],
+            "patch_tokens": tgt[:, 1:],
+        }

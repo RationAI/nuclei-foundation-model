@@ -51,6 +51,7 @@ def tiling(row: dict[str, Any]) -> list[dict[str, Any]]:
             slide_extent=(row["extent_x"], row["extent_y"]),
             tile_extent=(row["tile_extent_x"], row["tile_extent_y"]),
             stride=(row["stride_x"], row["stride_y"]),
+            last="keep",
         )
     ]
 

@@ -28,7 +28,7 @@ class iBOTPatchLoss(nn.Module):
     def sinkhorn_knopp_teacher(
         self,
         teacher_output: Tensor,
-        teacher_temp: Tensor,
+        teacher_temp: float,
         n_masked_patches_tensor: Tensor,
         n_iterations: int = 3,
     ) -> Tensor:
