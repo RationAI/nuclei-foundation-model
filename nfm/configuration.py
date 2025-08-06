@@ -11,11 +11,13 @@ class Config(PretrainedConfig):
         dim: int = 384,
         hidden_dim: int = 384 * 4,
         num_heads: int = 12,
-        num_layers: int = 24,
+        num_cross_layers: int = 24,
+        num_self_layers: int = 24,
         **kwargs: Any,
     ) -> None:
         self.dim = dim
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
-        self.num_layers = num_layers
+        self.num_cross_layers = num_cross_layers
+        self.num_self_layers = num_self_layers
         super().__init__(**kwargs)
