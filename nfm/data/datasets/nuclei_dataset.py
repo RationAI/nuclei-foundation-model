@@ -11,40 +11,27 @@ from sklearn.neighbors import KernelDensity
 from torch.utils.data import Dataset
 
 
-SLIDES_ROOT = Path("/workspace/nuclei/subsets")
-# The number of global and local crops is fixed to global_crop_count=2 and local_crop_count=8
-LOCAL_CROP_COUNT = 8
+type AdjacencyGraph = list[list[tuple[int, float]]]
 
 
 class NucleiDataset(Dataset):
     def __init__(
         self,
-        data_root: Path,  # Path("/flash/project_465002057/nuclei/subsets_results/")
+        base_path: Path,
         global_crop_k: int = 4096,
         local_crop_k: int = 768,
         local_crop_tokens: int = 48,
         global_crop_tokens: int = 256,
+        n_local_crops: int = 8,
         alpha: float = 0.8,
     ) -> None:
-        self.data_root = data_root
-        self._load_dataframe()
-        self.alpha = alpha
+        self.paths = list(base_path.rglob("nuclei/slide_id=*"))
         self.global_crop_k = global_crop_k
         self.local_crop_k = local_crop_k
         self.global_crop_tokens = global_crop_tokens
         self.local_crop_tokens = local_crop_tokens
-
-    def _get_slide_data_path(self, row):
-        path = Path(row["path"])
-        return (
-            self.data_root
-            / path.relative_to(SLIDES_ROOT).parent
-            / f"results/nuclei/slide_id={row['id']}"
-        )
-
-    def _load_dataframe(self) -> None:
-        df = pd.read_parquet(list(self.data_root.glob("*/*/results/slides/*.parquet")))
-        self.paths = df.apply(self._get_slide_data_path, axis=1).to_list()
+        self.n_local_crops = n_local_crops
+        self.alpha = alpha
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -59,7 +46,7 @@ class NucleiDataset(Dataset):
         indices = np.argmin(distances, axis=0)
         return indices
 
-    def _build_graph(self, points) -> list[list[tuple[int, float]]]:
+    def _build_graph(self, points: NDArray[np.uint32]) -> AdjacencyGraph:
         tri = Delaunay(points)
         distances = np.linalg.norm(
             points[tri.simplices[:, [0, 1, 2]]]
@@ -73,43 +60,35 @@ class NucleiDataset(Dataset):
         )
         return adj_graph
 
-    def _find_hybrid_component(
+    def _find_component(
         self,
         idx: int,
         k: int,
-        graph,
-        centroids: NDArray,
-        indices: NDArray | None = None,
+        graph: AdjacencyGraph,
+        centroids: NDArray[np.float32],
+        indices: NDArray[np.uint32] | None = None,
     ) -> list[int]:
-        n_points = len(centroids)
-        start_point_coords = centroids[idx]
+        component_indices = []
+        in_component = np.zeros(len(centroids), dtype=np.bool)
 
         pq = []
-        in_component = np.zeros(n_points, dtype=bool)
-        component_indices = []
-
         heapq.heappush(pq, (0, idx))
+        start_point_coords = centroids[idx]
 
         while len(pq) != 0 and len(component_indices) < k:
             _, current_idx = heapq.heappop(pq)
-
             if in_component[current_idx]:
                 continue
 
             in_component[current_idx] = True
             component_indices.append(current_idx)
 
-            neighbor_idxs = [idx for idx, _ in graph[current_idx]]
-            start_dists = np.linalg.norm(
-                centroids[neighbor_idxs] - start_point_coords, axis=1
-            )
-            for i, (neighbor_idx, edge_dist) in enumerate(graph[current_idx]):
-                if (indices is None or neighbor_idx in indices) and not in_component[
-                    neighbor_idx
-                ]:
-                    start_dist = start_dists[i]
+            for n_idx, edge_dist in graph[current_idx]:
+                if (indices is None or n_idx in indices) and not in_component[n_idx]:
+                    start_dist = np.linalg.norm(centroids[n_idx] - start_point_coords)
                     hybrid_cost = self.alpha * edge_dist + (1 - self.alpha) * start_dist
-                    heapq.heappush(pq, (hybrid_cost, neighbor_idx))
+                    heapq.heappush(pq, (hybrid_cost, n_idx))
+
         return component_indices
 
     def __getitem__(self, idx: int) -> dict[str, tuple[np.ndarray, np.ndarray]]:
@@ -117,62 +96,57 @@ class NucleiDataset(Dataset):
         centroids = np.stack(df.centroid.values)
         embeddings = np.stack(df.embedding.values)
 
+        assert len(centroids) >= self.global_crop_k
+
         graph = self._build_graph(centroids)
 
         # Global crop token generation
         global_crops = []
-        seed = random.randint(0, len(centroids))
+        seed = random.randint(0, len(centroids) - 1)
         global_crops.append(
-            self._find_hybrid_component(seed, self.global_crop_k, graph, centroids)
+            self._find_component(seed, self.global_crop_k, graph, centroids)
         )
 
-        # Randomly select a seed for the second global crop
-        seed = random.randint(int(self.global_crop_k * 0.8), self.global_crop_k)
+        seed = int(
+            random.triangular(0, self.global_crop_k - 1, self.global_crop_k * 0.8)
+        )
         global_crops.append(
-            self._find_hybrid_component(
+            self._find_component(
                 global_crops[0][seed], self.global_crop_k, graph, centroids
             )
         )
 
         # Global crop token generation
-        global_crop_tokenss = []
-        for global_idx in global_crops:
-            global_crop_tokens = self._get_tokens(
-                centroids[global_idx], centroids, self.global_crop_tokens
-            )
-            global_crop_tokenss.append(global_crop_tokens)
+        global_tokens = [
+            self._get_tokens(centroids[idx], centroids, self.global_crop_tokens)
+            for idx in global_crops
+        ]
 
         # Local crop generation
         local_crops = []
-        for i, global_crop_tokens in enumerate(global_crop_tokenss):
+        for i, g_tokens in enumerate(global_tokens):
             crops = []
-            tokens = np.random.choice(
-                global_crop_tokens, size=LOCAL_CROP_COUNT, replace=False
-            )
-            for token in tokens:
-                crop = self._find_hybrid_component(
+            tokens = np.random.choice(g_tokens, size=self.n_local_crops, replace=False)
+            crops = [
+                self._find_component(
                     token, self.local_crop_k, graph, centroids, global_crops[i]
                 )
-                crops.append(crop)
+                for token in tokens
+            ]
             local_crops.append(crops)
 
         # Local crop token generation
-        local_crop_tokenss = [[] for _ in range(len(global_crops))]
-        for i, crops in enumerate(local_crops):
-            for crop in crops:
-                local_crop_tokenss[i].append(
-                    self._get_tokens(centroids[crop], centroids, self.local_crop_tokens)
-                )
+        local_tokens = []
+        for crops in local_crops:
+            tokens = [
+                self._get_tokens(centroids[crop], centroids, self.local_crop_tokens)
+                for crop in crops
+            ]
+            local_tokens.append(tokens)
 
         return {
             "global_crops": (centroids[global_crops], embeddings[global_crops]),
             "local_crops": (centroids[local_crops], embeddings[local_crops]),
-            "global_crop_tokens": (
-                centroids[global_crop_tokenss],
-                embeddings[global_crop_tokenss],
-            ),
-            "local_crop_tokens": (
-                centroids[local_crop_tokenss],
-                embeddings[local_crop_tokenss],
-            ),
+            "global_crop_tokens": (centroids[global_tokens], embeddings[global_tokens]),
+            "local_crop_tokens": (centroids[local_tokens], embeddings[local_tokens]),
         }
