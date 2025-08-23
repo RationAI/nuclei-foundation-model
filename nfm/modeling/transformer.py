@@ -104,10 +104,16 @@ class Transformer(nn.Module):
             Layer(config) for _ in range(config.num_self_layers)
         )
         self.cls_token = nn.Parameter(torch.randn(config.dim))
-        self.final_norm = nn.RMSNorm(config.dim)
+        self.cls_norm = nn.RMSNorm(config.dim)
+        self.norm = nn.RMSNorm(config.dim)
 
     def forward(
-        self, tgt: Tensor, src: Tensor, tgt_pos: Tensor, src_pos: Tensor
+        self,
+        tgt: Tensor,
+        src: Tensor,
+        tgt_pos: Tensor,
+        src_pos: Tensor,
+        local_crops: bool = False,
     ) -> dict[str, Tensor]:
         """Forward pass of the Transformer model.
 
@@ -133,9 +139,13 @@ class Transformer(nn.Module):
             tgt = layer(tgt, tgt_pos)
 
         # Final normalization
-        tgt = self.final_norm(tgt)
+        patch_tokens = self.norm(tgt[:, 1:])
+        if self.training and local_crops:
+            cls_token = self.cls_norm(tgt[:, 0])
+        else:
+            cls_token = self.norm(tgt[:, 0])
 
         return {
-            "cls_token": tgt[:, 0],
-            "patch_tokens": tgt[:, 1:],
+            "cls_token": cls_token,
+            "patch_tokens": patch_tokens,
         }

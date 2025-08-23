@@ -14,6 +14,7 @@ trainer:
 data: {}
 
 model:
+  ema_momentum: 0.999
   dino:
     num_prototypes: 65536
     bottleneck_dim: 256

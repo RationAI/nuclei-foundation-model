@@ -18,9 +18,12 @@ from nfm.utils import CosineScheduler
 
 
 class SSLMetaArch(LightningModule):
-    def __init__(self, dino: DictConfig, ibot: DictConfig, **config: Any) -> None:
+    def __init__(
+        self, ema_momentum: float, dino: DictConfig, ibot: DictConfig, **config: Any
+    ) -> None:
         super().__init__()
         self.config = Config(**config)
+        self.ema_momentum = ema_momentum
 
         self.student = nn.ModuleDict(
             {
@@ -44,11 +47,6 @@ class SSLMetaArch(LightningModule):
 
     def setup(self, stage: str) -> None:
         if stage == "fit":
-            self.momentum = CosineScheduler(
-                base_value=0.994,
-                final_value=1,
-                total_iters=self.trainer.max_epochs * self.trainer.num_training_batches,
-            )
             self.teacher_temp = CosineScheduler(
                 base_value=0.07,
                 final_value=0.07,
@@ -83,7 +81,10 @@ class SSLMetaArch(LightningModule):
 
     def forward(self, batch: dict[str, Any]) -> dict[str, Tensor]:
         local_outputs = self.batch_forward_backbone(
-            self.student.backbone, batch["local_crops"], batch["local_crop_tokens"]
+            self.student.backbone,
+            batch["local_crops"],
+            batch["local_crop_tokens"],
+            local_crops=True,
         )
         local_cls_logits = self.student.dino_head(local_outputs["cls_token"])
 
@@ -161,7 +162,7 @@ class SSLMetaArch(LightningModule):
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
         optimizer = torch.optim.AdamW(
-            self.student.parameters(), lr=2.0e-04, weight_decay=0.04
+            self.student.parameters(), lr=0.0004, weight_decay=0.04
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
@@ -180,9 +181,10 @@ class SSLMetaArch(LightningModule):
         super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
 
         # update teacher with EMA
-        m = self.momentum[self.global_step]
         with torch.no_grad():
             student_params = list(self.student.parameters())
             teacher_params = list(self.teacher.parameters())
-            torch._foreach_mul_(teacher_params, m)
-            torch._foreach_add_(teacher_params, student_params, alpha=1 - m)
+            torch._foreach_mul_(teacher_params, self.ema_momentum)
+            torch._foreach_add_(
+                teacher_params, student_params, alpha=1 - self.ema_momentum
+            )
