@@ -3,8 +3,7 @@ line-length = 88
 target-version = "py312"
 
 [format]
-# Enable reformatting of code snippets in docstrings.
-docstring-code-format = true
+docstring-code-format = true # Enable reformatting of code snippets in docstrings.
 
 [lint]
 unfixable = [
@@ -20,7 +19,7 @@ extend-select = [
     "PGH", # pygrep
     "RUF", # ruff checks
     "SIM", # flake8-simplify
-    "TCH", # flake8-type-checking
+    "TC", # flake8-type-checking
     "TID", # flake8-tidy-imports
     "UP",  # pyupgrade
     "D",   # pydocstyle 
@@ -36,8 +35,8 @@ extend-ignore = [
     "D106",   # missing docstring in public nested class
     "D107",   # missing docstring in __init__
     "N812",   # lowercase imported as non lowercase
-    "TCH002", # move third-party into a type-checking block
-    "F722",   # jaxtyping
+    "TC002", # move third-party into a type-checking block
+    "F722", # jaxtyping
 ]
 
 [lint.flake8-tidy-imports]
