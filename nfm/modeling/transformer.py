@@ -4,7 +4,7 @@ from einops import rearrange, repeat
 from torch import Tensor, nn
 
 from nfm.configuration import Config
-from nfm.modeling.layers import CayleySTRING, FeedForward
+from nfm.modeling.layers import FeedForward, RoPE
 
 
 @torch.autocast("cuda", enabled=False)
@@ -26,7 +26,7 @@ class Attention(nn.Module):
         self.dropout = dropout
         self.head_dim = dim // num_heads
 
-        self.rope = CayleySTRING(self.head_dim, theta=10000)
+        self.rope = RoPE(self.head_dim, theta=10000)
         self.q = nn.Linear(dim, dim, bias=False)
         self.kv = nn.Linear(dim, dim * 2, bias=False)
         self.wo = nn.Linear(dim, dim, bias=False)
