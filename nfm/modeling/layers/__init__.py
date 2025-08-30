@@ -1,5 +1,5 @@
-from nfm.modeling.layers.cayley_string import CayleySTRING
 from nfm.modeling.layers.ffn import FeedForward
+from nfm.modeling.layers.rope import RoPE
 
 
-__all__ = ["CayleySTRING", "FeedForward"]
+__all__ = ["FeedForward", "RoPE"]

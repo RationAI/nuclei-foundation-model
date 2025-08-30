@@ -4,30 +4,34 @@ from torch import Tensor, nn
 from torch.nn.utils.parametrizations import orthogonal
 
 
-class CayleySTRING(nn.Module):
-    """Implements the Cayley-STRING positional encoding.
+class RoPE(nn.Module):
+    """Implements the N dimensional RoPE positional encoding.
 
-    Based on "Learning the RoPEs: Better 2D and 3D Position Encodings with STRING"
-    (https://arxiv.org/abs/2502.02562).
+    Applies RoPE-Mixed on input under learnable orthogonal transformation P.
 
-    Applies RoPE followed by multiplication with a learnable orthogonal matrix P
-    parameterized by the Cayley transform.
-
-    Args:
-        head_dim (int): The feature dimension of the input tensor. Must be even.
-        pos_dim (int): The dimensionality of the position vectors (e.g., 1 for 1D, 2 for 2D).
-        theta (float): The base value for the RoPE frequency calculation.
+    Reference:
+        - "Learning the RoPEs: Better 2D and 3D Position Encodings with STRING" (https://arxiv.org/abs/2502.02562)
+        - "Rethinking RoPE: A Mathematical Blueprint for N-dimensional Rotary Positional Embedding" (https://arxiv.org/abs/2504.06308)
     """
 
     def __init__(self, dim: int, pos_dim: int = 2, theta: float = 100.0) -> None:
+        """Initialize RoPE module.
+
+        Args:
+            dim: The feature dimension of the input tensor. Must be even.
+            pos_dim: The dimensionality of the position vectors (e.g., 1 for 1D, 2 for 2D).
+            theta: The base value for the RoPE frequency calculation.
+        """
         super().__init__()
         freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
-        self.freqs = nn.Parameter(repeat(freqs, "d -> p d", p=pos_dim))
-        self.P = orthogonal(nn.Linear(dim, dim, bias=False), orthogonal_map="cayley")
+        self.freqs = nn.Parameter(repeat(freqs, "d -> p d", p=pos_dim).clone())
+        self.P = orthogonal(
+            nn.Linear(dim, dim, bias=False), orthogonal_map="householder"
+        )
 
     @torch.autocast("cuda", enabled=False)
     def forward(self, x: Tensor, positions: Tensor) -> Tensor:
-        """Apply Cayley-STRING positional encoding.
+        """Apply RoPE positional encoding.
 
         Args:
             x ([b, h, n, d]): Input tensor.
