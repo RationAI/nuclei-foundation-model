@@ -17,24 +17,32 @@ type AdjacencyGraph = list[list[tuple[int, float]]]
 class NucleiDataset(Dataset):
     def __init__(
         self,
-        base_path: Path,
+        slides_path: Path = Path(
+            "/mnt/data/Projects/inflammatory_bowel_dissease/ulcerative_colitis/data_tiff/nuclei/40x/splits/train"
+        ),
+        nuclei_path: Path = Path(
+            "/mnt/data/Projects/inflammatory_bowel_dissease/ulcerative_colitis/data_tiff/nuclei/40x/all/results/nuclei"
+        ),
         global_crop_k: int = 4096,
         local_crop_k: int = 768,
         local_crop_tokens: int = 48,
         global_crop_tokens: int = 256,
         n_local_crops: int = 8,
         alpha: float = 0.8,
+        target_mpp: float = 0.25,
     ) -> None:
-        self.paths = list(base_path.rglob("nuclei/slide_id=*"))
+        self.slides = pd.read_parquet(slides_path)
+        self.nuclei_path = nuclei_path
         self.global_crop_k = global_crop_k
         self.local_crop_k = local_crop_k
         self.global_crop_tokens = global_crop_tokens
         self.local_crop_tokens = local_crop_tokens
         self.n_local_crops = n_local_crops
         self.alpha = alpha
+        self.target_mpp = target_mpp
 
     def __len__(self) -> int:
-        return len(self.paths)
+        return len(self.slides)
 
     def _get_tokens(
         self, points: NDArray, centroids: NDArray, token_count: int
@@ -91,9 +99,17 @@ class NucleiDataset(Dataset):
 
         return component_indices
 
+    def _normalize(self, centroids, slide):
+        scale_x = slide["mpp_x"] / self.target_mpp
+        scale_y = slide["mpp_y"] / self.target_mpp
+
+        return centroids * (scale_x, scale_y)
+
     def __getitem__(self, idx: int) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-        df = pd.read_parquet(self.paths[idx])
-        centroids = np.stack(df.centroid.values)
+        slide = self.slides.iloc[idx]
+        df = pd.read_parquet(self.nuclei_path / f"slide_id={slide['slide_id']}")
+
+        centroids = self._normalize(np.stack(df.centroid.values), slide)
         embeddings = np.stack(df.embedding.values)
 
         assert len(centroids) >= self.global_crop_k
@@ -118,8 +134,8 @@ class NucleiDataset(Dataset):
 
         # Global crop token generation
         global_tokens = [
-            self._get_tokens(centroids[idx], centroids, self.global_crop_tokens)
-            for idx in global_crops
+            self._get_tokens(centroids[crop], centroids, self.global_crop_tokens)
+            for crop in global_crops
         ]
 
         # Local crop generation
@@ -150,3 +166,18 @@ class NucleiDataset(Dataset):
             "global_crop_tokens": (centroids[global_tokens], embeddings[global_tokens]),
             "local_crop_tokens": (centroids[local_tokens], embeddings[local_tokens]),
         }
+
+
+# import time
+
+
+# print("start")
+# ds = NucleiDataset()
+# start = time.time()
+# item = ds[0]
+
+# print(item["local_crops"][0].shape)
+
+
+# print("time", time.time() - start)
+# print(item.keys())

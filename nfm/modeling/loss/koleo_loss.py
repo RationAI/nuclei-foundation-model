@@ -5,6 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 from torch import Tensor
 
 
@@ -33,6 +34,10 @@ class KoLeoLoss(nn.Module):
             eps: Small value to avoid numerical instability.
         """
         student_output = F.normalize(student_output, eps=eps, p=2, dim=-1)
+
+        pattern = "b n ... -> (b n) ..."
+        student_output = rearrange(student_output, pattern)
+
         indices = self.pairwise_nns_inner(student_output)
         distances = self.pdist(student_output, student_output[indices])  # NxD, NxD -> N
         return -torch.log(distances + eps).mean()
