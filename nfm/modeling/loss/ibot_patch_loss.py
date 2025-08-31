@@ -38,8 +38,14 @@ class iBOTPatchLoss(nn.Module):
             teacher_output / teacher_temp
         ).T  # Q is K-by-B for consistency with notations from our paper
         # B = Q.shape[1] * world_size # number of samples to assign
-        b = n_masked_patches_tensor
-        dist.all_reduce(b)
+        b = torch.tensor(
+            n_masked_patches_tensor,
+            dtype=torch.float32,
+            device=teacher_output.device,
+        )
+
+        if dist.is_initialized():
+            dist.all_reduce(b)
         k = q.shape[0]  # how many prototypes
 
         # make the matrix sums to 1
@@ -67,21 +73,24 @@ class iBOTPatchLoss(nn.Module):
         self,
         student_patch_tokens_masked: Tensor,
         teacher_patch_tokens_masked: Tensor,
-        student_masks_flat: Tensor,
+        student_masks_flat: Tensor = None,
         n_masked_patches=None,
         masks_weight=None,
     ) -> Tensor:
-        t = teacher_patch_tokens_masked
         s = student_patch_tokens_masked
+        t = teacher_patch_tokens_masked.clone()
         loss = torch.sum(t * F.log_softmax(s / self.student_temp, dim=-1), dim=-1)
 
-        if masks_weight is None:
-            masks_weight = (
-                (1 / student_masks_flat.sum(-1).clamp(min=1.0))
-                .unsqueeze(-1)
-                .expand_as(student_masks_flat)[student_masks_flat]
-            )
-        if n_masked_patches is not None:
-            loss = loss[:n_masked_patches]
-        loss = loss * masks_weight
-        return -loss.sum() / student_masks_flat.shape[0]
+        if student_masks_flat is None:
+            return -loss.sum() / s.shape[0]
+
+        # if masks_weight is None:
+        #     masks_weight = (
+        #         (1 / student_masks_flat.sum(-1).clamp(min=1.0))
+        #         .unsqueeze(-1)
+        #         .expand_as(student_masks_flat)[student_masks_flat]
+        #     )
+        # if n_masked_patches is not None:
+        #     loss = loss[:n_masked_patches]
+        # loss = loss * masks_weight
+        # return -loss.sum() / student_masks_flat.shape[0]

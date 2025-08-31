@@ -36,7 +36,7 @@ class CayleySTRING(nn.Module):
         px = self.P(x.float())
 
         # apply RoPE-Mixed
-        freqs = positions @ self.freqs
+        freqs = positions.to(self.freqs.dtype) @ self.freqs
         freqs_cis = rearrange(
             torch.polar(torch.ones_like(freqs), freqs), "b n c -> b 1 n c"
         )
