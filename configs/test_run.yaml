@@ -1,17 +1,24 @@
 defaults:
-  - /default.yaml  # or relative path to your default config
+  - /default  # or relative path to your default config
   - /data/datasets@data.train: train
   - /data/datasets@data.val: val
   - _self_
 
-logger: null
+# logger: null
 
 mode: fit
 
 trainer:
+  max_epochs: 100
+  log_every_n_steps: 10   # log metrics every 10 steps
   limit_val_batches: 0
 
 data:
-  batch_size: 1
-  num_workers: 0
+  batch_size: 2
+  num_workers: 4
 
+
+metadata:
+  experiment_name: "Default"
+  run_name: "NFM test run"
+  description: "Test run for NFM"

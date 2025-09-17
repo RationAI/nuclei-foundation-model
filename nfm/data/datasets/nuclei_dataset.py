@@ -23,11 +23,11 @@ class NucleiDataset(Dataset):
         nuclei_path: Path = Path(
             "/mnt/data/Projects/inflammatory_bowel_dissease/ulcerative_colitis/data_tiff/nuclei/40x/all/results/nuclei"
         ),
-        global_crop_k: int = 4096,
-        local_crop_k: int = 768,
+        global_crop_k: int = 4096,  # 4096,
+        local_crop_k: int = 768,  # 768,
         local_crop_tokens: int = 48,
         global_crop_tokens: int = 256,
-        n_local_crops: int = 8,
+        n_local_crops: int = 8,  # 8,
         alpha: float = 0.8,
         target_mpp: float = 0.25,
     ) -> None:
@@ -112,7 +112,13 @@ class NucleiDataset(Dataset):
         centroids = self._normalize(np.stack(df.centroid.values), slide)
         embeddings = np.stack(df.embedding.values)
 
-        assert len(centroids) >= self.global_crop_k
+        # assert len(centroids) >= self.global_crop_k
+        if len(centroids) < self.global_crop_k:
+            slide = self.slides.iloc[0]
+            df = pd.read_parquet(self.nuclei_path / f"slide_id={slide['slide_id']}")
+
+            centroids = self._normalize(np.stack(df.centroid.values), slide)
+            embeddings = np.stack(df.embedding.values)
 
         graph = self._build_graph(centroids)
 

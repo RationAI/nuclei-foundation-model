@@ -9,7 +9,7 @@ checkpoint: null
 
 trainer:
   precision: bf16
-  # gradient_clip_val: 0.1
+  gradient_clip_val: 0.1
 
 data: {}
 
