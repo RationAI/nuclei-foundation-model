@@ -180,8 +180,8 @@ class SSLMetaArch(LightningModule):
 
         return (
             ibot_loss * self.ibot_loss_weight
-            # + dino_loss * self.dino_loss_weight
-            # + koleo_loss * self.koleo_loss_weight
+            + dino_loss * self.dino_loss_weight
+            + koleo_loss * self.koleo_loss_weight
         )
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
