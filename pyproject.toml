@@ -21,6 +21,7 @@ dependencies = [
     "deepspeed>=0.17.2",
     "shapely>=2.1.1",
     "graph_pytorch_ext",
+    "mlflow<3.0",
 ]
 
 [tool.uv]
