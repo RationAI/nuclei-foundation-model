@@ -67,7 +67,7 @@ class DINOLoss(nn.Module):
         """Cross-entropy between softmax outputs of the teacher and student networks."""
         t = teacher_out_softmaxed_centered.clone()
         lsm = F.log_softmax(student_output / self.student_temp, dim=-1)
-        lsm = rearrange(lsm, "ns b d -> ns 1 b d")
+        lsm = rearrange(lsm, "b ns d -> ns 1 b d")
         t = rearrange(t, "nt b d -> 1 nt b d")
 
         loss = -torch.sum(t * lsm, dim=-1)
