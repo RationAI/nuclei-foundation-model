@@ -172,11 +172,10 @@ class SSLMetaArch(LightningModule):
             dino_loss,
             sync_dist=True,
             prog_bar=True,
-            batch_size=1,
             rank_zero_only=True,
         )
-        self.log("train/ibot_loss", ibot_loss, sync_dist=True)
-        self.log("train/koleo_loss", koleo_loss, sync_dist=True)
+        self.log("train/ibot_loss", ibot_loss, sync_dist=True, rank_zero_only=True)
+        self.log("train/koleo_loss", koleo_loss, sync_dist=True, rank_zero_only=True)
 
         return (
             ibot_loss * self.ibot_loss_weight
