@@ -38,6 +38,7 @@ class KoLeoLoss(nn.Module):
             rank = 0
 
         # nearest neighbor search
+        # we don't apply koleo loss between cls tokens of a same image
         with torch.no_grad():
             similarity = torch.bmm(x, all_x.transpose(1, 2))
             n, local_b, global_b = similarity.shape
