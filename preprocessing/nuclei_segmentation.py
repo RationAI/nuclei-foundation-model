@@ -1,12 +1,10 @@
 from typing import Any
 
 import numpy as np
-import ray
 import torch
-from histopath.ray.datasource import OpenSlideMetaDatasource
-from histopath.tiling import grid_tiles
-from histopath.tiling.openslide_tile_reader import openslide_tile_reader
-from histopath.tiling.utils import row_hash
+from ratiopath.ray import read_slides
+from ratiopath.tiling import grid_tiles, read_slide_tiles
+from ratiopath.tiling.utils import row_hash
 from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
 
@@ -14,6 +12,26 @@ PATH = ""
 TILE_EXTENT = 2048
 OVERLAP = 64
 STRIDE = TILE_EXTENT - OVERLAP
+
+
+def tiling(row: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "tile_x": x,
+            "tile_y": y,
+            "path": row["path"],
+            "slide_id": row["id"],
+            "level": row["level"],
+            "tile_extent_x": row["tile_extent_x"],
+            "tile_extent_y": row["tile_extent_y"],
+        }
+        for x, y in grid_tiles(
+            slide_extent=(row["extent_x"], row["extent_y"]),
+            tile_extent=(row["tile_extent_x"], row["tile_extent_y"]),
+            stride=(row["stride_x"], row["stride_y"]),
+            last="keep",
+        )
+    ]
 
 
 class Model:
@@ -39,25 +57,13 @@ class Model:
         outputs = self.model(**inputs)
         results = self.processor.post_process(outputs)
 
-        batch["polygons"] = [result["polygons"].cpu().numpy() for result in results]
-        batch["embeddings"] = [result["embeddings"].cpu().numpy() for result in results]
-        return batch
-
-
-def tiling(row: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        {"tile_x": x, "tile_y": y, **row}
-        for x, y in grid_tiles(
-            slide_extent=(row["extent_x"], row["extent_y"]),
-            tile_extent=(row["tile_extent_x"], row["tile_extent_y"]),
-            stride=(row["stride_x"], row["stride_y"]),
-            last="keep",
-        )
-    ]
-
-
-def filter_tissue(row: dict[str, Any]) -> bool:
-    return row["tile"].std() > 8
+        return {
+            "slide_id": batch["slide_id"],
+            "tile_x": batch["tile_x"],
+            "tile_y": batch["tile_y"],
+            "polygons": [result["polygons"].cpu().numpy() for result in results],
+            "embeddings": [result["embeddings"].cpu().numpy() for result in results],
+        }
 
 
 def drop_duplicates(row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -74,7 +80,7 @@ def drop_duplicates(row: dict[str, Any]) -> list[dict[str, Any]]:
 
     return [
         {
-            "slide_id": row["id"],
+            "slide_id": row["slide_id"],
             "polygon": polygon,
             "embedding": embedding,
             "centroid": centroid,
@@ -86,24 +92,25 @@ def drop_duplicates(row: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 if __name__ == "__main__":
-    slides = ray.data.read_datasource(
-        OpenSlideMetaDatasource(PATH, mpp=0.25, tile_extent=TILE_EXTENT, stride=STRIDE)
-    ).map(row_hash, num_cpus=0.1, memory=128 * 1024 * 1024)
+    slides = read_slides(PATH, mpp=0.25, tile_extent=TILE_EXTENT, stride=STRIDE)
+    slides = slides.map(row_hash, num_cpus=0.1, memory=128 * 1024 * 1024)
     slides.write_parquet("slides")
 
     tiles = slides.flat_map(tiling, num_cpus=0.2, memory=128 * 1024 * 1024).repartition(
-        target_num_rows_per_block=200
+        target_num_rows_per_block=128
     )
-    tissue_tiles = tiles.map(
-        openslide_tile_reader, num_cpus=1, memory=3 * 1024 * 1024 * 1024
-    ).filter(filter_tissue, memory=1.5 * 1024 * 1024 * 1024)
+
+    tissue_tiles = tiles.map_batches(
+        read_slide_tiles, num_cpus=1, memory=4 * 1024 * 1024 * 1024
+    ).filter(lambda row: row["tile"].std() > 8, memory=1.5 * 1024 * 1024 * 1024)
     nuclei = tissue_tiles.map_batches(
         Model,
         num_gpus=1,
         num_cpus=0,
-        batch_size=20,
+        batch_size=16,
         memory=3 * 1024 * 1024 * 1024,
         concurrency=8,
+        zero_copy_batch=True,
     )
     nuclei.flat_map(
         drop_duplicates, num_cpus=0.1, memory=1.5 * 1024 * 1024 * 1024
