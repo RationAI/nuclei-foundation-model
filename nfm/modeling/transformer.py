@@ -7,19 +7,6 @@ from nfm.configuration import Config
 from nfm.modeling.layers import CayleySTRING, FeedForward
 
 
-@torch.autocast("cuda", enabled=False)
-def relative_to_absolute_pos(pos: Tensor, step_x: float, step_y: float) -> Tensor:
-    pos = pos.sigmoid()
-    h, w = pos.shape[1:3]
-
-    anchor_x = torch.arange(w, dtype=torch.float32, device=pos.device) * step_x
-    anchor_y = torch.arange(h, dtype=torch.float32, device=pos.device) * step_y
-
-    absolute_x = pos[..., 0] * step_x + anchor_x
-    absolute_y = pos[..., 1] * step_y + anchor_y.unsqueeze(1)
-    return torch.stack((absolute_x, absolute_y), dim=-1)
-
-
 class Attention(nn.Module):
     def __init__(self, dim: int, num_heads: int, dropout: float = 0.0) -> None:
         super().__init__()
@@ -27,9 +14,13 @@ class Attention(nn.Module):
         self.head_dim = dim // num_heads
 
         self.rope = CayleySTRING(self.head_dim, theta=10000)
+
         self.q = nn.Linear(dim, dim, bias=False)
         self.kv = nn.Linear(dim, dim * 2, bias=False)
         self.wo = nn.Linear(dim, dim, bias=False)
+
+        self.q_norm = nn.RMSNorm(self.head_dim)
+        self.k_norm = nn.RMSNorm(self.head_dim)
 
     def forward(
         self, tgt: Tensor, src: Tensor, tgt_pos: Tensor, src_pos: Tensor
@@ -38,6 +29,8 @@ class Attention(nn.Module):
         k, v = rearrange(
             self.kv(src), "b n (two h d) -> two b h n d", two=2, d=self.head_dim
         )
+        q = self.q_norm(q)
+        k = self.k_norm(k)
 
         x = F.scaled_dot_product_attention(
             query=self.rope(q, tgt_pos),
