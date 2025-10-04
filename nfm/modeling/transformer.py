@@ -8,12 +8,14 @@ from nfm.modeling.layers import FeedForward, RoPE
 
 
 class Attention(nn.Module):
-    def __init__(self, dim: int, num_heads: int, dropout: float = 0.0) -> None:
+    def __init__(
+        self, dim: int, num_heads: int, rope_theta: float, dropout: float = 0.0
+    ) -> None:
         super().__init__()
         self.dropout = dropout
         self.head_dim = dim // num_heads
 
-        self.rope = RoPE(self.head_dim, theta=10000)
+        self.rope = RoPE(self.head_dim, theta=rope_theta)
         self.q = nn.Linear(dim, dim, bias=False)
         self.kv = nn.Linear(dim, dim * 2, bias=False)
         self.wo = nn.Linear(dim, dim, bias=False)
@@ -46,8 +48,12 @@ class CrossLayer(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
 
-        self.self_attn = Attention(dim=config.dim, num_heads=config.num_heads)
-        self.cross_attn = Attention(dim=config.dim, num_heads=config.num_heads)
+        self.self_attn = Attention(
+            dim=config.dim, num_heads=config.num_heads, rope_theta=config.rope_theta
+        )
+        self.cross_attn = Attention(
+            dim=config.dim, num_heads=config.num_heads, rope_theta=config.rope_theta
+        )
         self.ffn = FeedForward(config.dim, config.hidden_dim)
 
         self.pre_self_attn_norm = nn.RMSNorm(config.dim)
@@ -71,7 +77,9 @@ class Layer(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
 
-        self.self_attn = Attention(dim=config.dim, num_heads=config.num_heads)
+        self.self_attn = Attention(
+            dim=config.dim, num_heads=config.num_heads, rope_theta=config.rope_theta
+        )
         self.ffn = FeedForward(config.dim, config.hidden_dim)
 
         self.pre_self_attn_norm = nn.RMSNorm(config.dim)
