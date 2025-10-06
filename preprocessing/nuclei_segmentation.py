@@ -1,37 +1,85 @@
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow
 import torch
 from ratiopath.ray import read_slides
 from ratiopath.tiling import grid_tiles, read_slide_tiles
 from ratiopath.tiling.utils import row_hash
+from ray.data._internal.datasource.parquet_datasink import ParquetDatasink
 from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
 
-PATH = ""
+INPUT_SLIDES = ""
+OUTPUT_SLIDES = "slides"
+OUTPUT_NUCLEI = "nuclei"
 TILE_EXTENT = 2048
 OVERLAP = 64
 STRIDE = TILE_EXTENT - OVERLAP
+LOG_DIR = Path("logs")
 
 
-def tiling(row: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        {
-            "tile_x": x,
-            "tile_y": y,
-            "path": row["path"],
-            "slide_id": row["id"],
-            "level": row["level"],
-            "tile_extent_x": row["tile_extent_x"],
-            "tile_extent_y": row["tile_extent_y"],
-        }
-        for x, y in grid_tiles(
-            slide_extent=(row["extent_x"], row["extent_y"]),
-            tile_extent=(row["tile_extent_x"], row["tile_extent_y"]),
-            stride=(row["stride_x"], row["stride_y"]),
-            last="keep",
+class ParquetDatasinkWithLogs(ParquetDatasink):
+    def _write_parquet_files(
+        self,
+        tables: list["pyarrow.Table"],
+        filename: str,
+        output_schema: "pyarrow.Schema",
+        write_uuid: str,
+        write_kwargs: dict[str, Any],
+    ) -> None:
+        for col in ["tile_x", "tile_y"]:
+            idx = output_schema.get_field_index(col)
+            if idx != -1:
+                output_schema = output_schema.remove(idx)
+
+        super()._write_parquet_files(
+            [t.drop_columns(["tile_x", "tile_y"]) for t in tables],
+            filename,
+            output_schema,
+            write_uuid,
+            write_kwargs,
         )
-    ]
+
+        for table in tables:
+            df = table.to_pandas()
+            for slide_id, group in df.groupby("slide_id"):
+                log_entries = group[["tile_x", "tile_y"]].drop_duplicates(
+                    ignore_index=True
+                )
+                LOG_DIR.mkdir(parents=True, exist_ok=True)
+                with open(LOG_DIR / f"{slide_id}.log", "a") as f:
+                    f.write(log_entries.to_string(header=False, index=False))
+                    f.write("\n")
+
+
+def tiling(row: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    processed_tiles = set()
+    log_file = LOG_DIR / f"{row['id']}.log"
+    if log_file.exists():
+        with log_file.open("r") as f:
+            for line in f:
+                x_str, y_str = line.split()
+                processed_tiles.add((int(x_str), int(y_str)))
+
+    for x, y in grid_tiles(
+        slide_extent=(row["extent_x"], row["extent_y"]),
+        tile_extent=(row["tile_extent_x"], row["tile_extent_y"]),
+        stride=(row["stride_x"], row["stride_y"]),
+        last="keep",
+    ):
+        if (x, y) not in processed_tiles:
+            yield {
+                "tile_x": x,
+                "tile_y": y,
+                "path": row["path"],
+                "slide_id": row["id"],
+                "level": row["level"],
+                "tile_extent_x": row["tile_extent_x"],
+                "tile_extent_y": row["tile_extent_y"],
+            }
 
 
 class Model:
@@ -53,7 +101,9 @@ class Model:
     @torch.inference_mode()
     @torch.autocast(device_type="cuda", dtype=torch.float16)
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
-        inputs = self.processor(batch["tile"], device=self.device, return_tensors="pt")
+        inputs = self.processor(
+            batch["tile"].copy(), device=self.device, return_tensors="pt"
+        )
         outputs = self.model(**inputs)
         results = self.processor.post_process(outputs)
 
@@ -66,7 +116,18 @@ class Model:
         }
 
 
-def drop_duplicates(row: dict[str, Any]) -> list[dict[str, Any]]:
+def filter_tissue_tiles(row: dict[str, Any]) -> bool:
+    if row["tile"].std() > 8:
+        return True
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(LOG_DIR / f"{row['slide_id']}.log", "a") as f:
+        f.write(f"{row['tile_x']} {row['tile_y']}\n")
+
+    return False
+
+
+def drop_duplicates(row: dict[str, Any]) -> Iterator[dict[str, Any]]:
     centroids = row["polygons"].min(axis=1)
 
     keep = np.all(centroids >= OVERLAP / 2, axis=-1) & np.all(
@@ -78,23 +139,23 @@ def drop_duplicates(row: dict[str, Any]) -> list[dict[str, Any]]:
     embeddings = row["embeddings"][keep]
     centroids = centroids[keep] + offset
 
-    return [
-        {
+    for polygon, embedding, centroid in zip(
+        polygons, embeddings, centroids, strict=True
+    ):
+        yield {
             "slide_id": row["slide_id"],
+            "tile_x": row["tile_x"],
+            "tile_y": row["tile_y"],
             "polygon": polygon,
             "embedding": embedding,
             "centroid": centroid,
         }
-        for polygon, embedding, centroid in zip(
-            polygons, embeddings, centroids, strict=True
-        )
-    ]
 
 
-if __name__ == "__main__":
-    slides = read_slides(PATH, mpp=0.25, tile_extent=TILE_EXTENT, stride=STRIDE)
+def main() -> None:
+    slides = read_slides(INPUT_SLIDES, mpp=0.25, tile_extent=TILE_EXTENT, stride=STRIDE)
     slides = slides.map(row_hash, num_cpus=0.1, memory=128 * 1024 * 1024)
-    slides.write_parquet("slides")
+    slides.write_parquet(OUTPUT_SLIDES)
 
     tiles = slides.flat_map(tiling, num_cpus=0.2, memory=128 * 1024 * 1024).repartition(
         target_num_rows_per_block=128
@@ -102,7 +163,8 @@ if __name__ == "__main__":
 
     tissue_tiles = tiles.map_batches(
         read_slide_tiles, num_cpus=1, memory=4 * 1024 * 1024 * 1024
-    ).filter(lambda row: row["tile"].std() > 8, memory=1.5 * 1024 * 1024 * 1024)
+    ).filter(filter_tissue_tiles, memory=1.5 * 1024 * 1024 * 1024)
+    tissue_tiles = tissue_tiles.repartition(target_num_rows_per_block=128)
     nuclei = tissue_tiles.map_batches(
         Model,
         num_gpus=1,
@@ -112,6 +174,14 @@ if __name__ == "__main__":
         concurrency=8,
         zero_copy_batch=True,
     )
-    nuclei.flat_map(
+    nuclei = nuclei.flat_map(
         drop_duplicates, num_cpus=0.1, memory=1.5 * 1024 * 1024 * 1024
-    ).write_parquet("nuclei", partition_cols=["slide_id"])
+    )
+
+    nuclei.write_datasink(
+        ParquetDatasinkWithLogs(OUTPUT_NUCLEI, partition_cols=["slide_id"])
+    )
+
+
+if __name__ == "__main__":
+    main()
