@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 import pyarrow
+import ray
 import torch
 from ratiopath.ray import read_slides
 from ratiopath.tiling import grid_tiles, read_slide_tiles
@@ -184,4 +185,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    ray.init()
     main()
+    ray.shutdown()
