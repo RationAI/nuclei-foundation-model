@@ -4,7 +4,6 @@
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from einops import rearrange
 from torch import Tensor, nn
 
 
@@ -13,17 +12,22 @@ class DINOLoss(nn.Module):
         super().__init__()
         self.student_temp = student_temp
 
-    @torch.no_grad()
     def sinkhorn_knopp_teacher(
         self, teacher_output: Tensor, teacher_temp: float, n_iterations: int = 3
     ) -> Tensor:
+        """Performs the Sinkhorn-Knopp algorithm to obtain a distribution over prototypes that is uniform over the batch.
+
+        Args:
+            teacher_output: Teacher outputs of shape (batch_size, num_prototypes).
+            teacher_temp: Temperature parameter for the teacher outputs.
+            n_iterations: Number of iterations for the Sinkhorn-Knopp algorithm.
+        """
         teacher_output = teacher_output.float()
-        world_size = dist.get_world_size() if dist.is_initialized() else 1
-        q = torch.exp(
-            teacher_output / teacher_temp
-        ).T  # Q is K-by-B for consistency with notations from our paper
-        b = q.shape[1] * world_size  # number of samples to assign
-        k = q.shape[0]  # how many prototypes
+        q = torch.exp(teacher_output / teacher_temp)
+
+        b, k = q.shape
+        if dist.is_initialized():
+            b *= dist.get_world_size()
 
         # make the matrix sums to 1
         sum_q = torch.sum(q)
@@ -32,43 +36,35 @@ class DINOLoss(nn.Module):
         q /= sum_q
 
         for _ in range(n_iterations):
-            # normalize each row: total weight per prototype must be 1/K
-            sum_of_rows = torch.sum(q, dim=1, keepdim=True)
+            # normalize each column: total weight per prototype must be 1/K
+            sum_of_cols = torch.sum(q, dim=0, keepdim=True)
             if dist.is_initialized():
-                dist.all_reduce(sum_of_rows)
-            q /= sum_of_rows
-            q /= k
+                dist.all_reduce(sum_of_cols)
+            q /= sum_of_cols * k
 
-            # normalize each column: total weight per sample must be 1/B
-            q /= torch.sum(q, dim=0, keepdim=True)
-            q /= b
+            # normalize each row: total weight per sample must be 1/B
+            q /= torch.sum(q, dim=1, keepdim=True) * b
 
         q *= b  # the columns must sum to 1 so that Q is an assignment
-        return q.T
-
-    # def forward(
-    #     self,
-    #     student_output_list: list[Tensor],
-    #     teacher_out_softmaxed_centered_list: list[Tensor],
-    # ) -> Tensor:
-    #     """Cross-entropy between softmax outputs of the teacher and student networks."""
-    #     total_loss = 0
-    #     for s in student_output_list:
-    #         lsm = F.log_softmax(s / self.student_temp, dim=-1)
-    #         for t in teacher_out_softmaxed_centered_list:
-    #             total_loss -= torch.sum(t * lsm, dim=-1).mean()
-    #     return total_loss
+        return q
 
     def forward(
         self,
-        student_output: Tensor,
-        teacher_out_softmaxed_centered: Tensor,
+        student_logits: Tensor,
+        teacher_probs: Tensor,
+        ignore_diagonal: bool = False,
     ) -> Tensor:
-        """Cross-entropy between softmax outputs of the teacher and student networks."""
-        t = teacher_out_softmaxed_centered.clone()
-        lsm = F.log_softmax(student_output / self.student_temp, dim=-1)
-        lsm = rearrange(lsm, "b ns d -> ns 1 b d")
-        t = rearrange(t, "nt b d -> 1 nt b d")
+        """Cross-entropy between softmax outputs of the teacher and student networks.
 
-        loss = -torch.sum(t * lsm, dim=-1)
-        return loss.mean()
+        Args:
+            student_logits: [batch, student crops, prototypes]
+            teacher_probs:  [batch, teacher crops, prototypes] must sum to 1 over the last dim
+        """
+        student_logits = student_logits.float()
+        student_logits = F.log_softmax(student_logits / self.student_temp, dim=-1)
+        loss = -torch.einsum("b s k, b t k -> b s t", student_logits, teacher_probs)
+
+        if ignore_diagonal:
+            loss.diagonal(dim1=-2, dim2=-1).fill_(torch.nan)
+
+        return loss.nanmean()

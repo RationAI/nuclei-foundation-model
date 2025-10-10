@@ -11,8 +11,6 @@ trainer:
   precision: bf16
   gradient_clip_val: 0.1
 
-data: {}
-
 model:
   ema_momentum: 0.999
   dino:
@@ -27,7 +25,7 @@ model:
     hidden_dim: 2048
 
 metadata:
-  experiment_name: ???
+  experiment_name: Nuclei Foundational Model
   run_name: ???
   description: ???
   hyperparams: {}

@@ -1,0 +1,12 @@
+# @package _global_
+
+data:
+  batch_size: 32
+  num_workers: 10
+  train:
+    slides_path: /mnt/data/Projects/inflammatory_bowel_dissease/ulcerative_colitis/data_tiff/nuclei/40x/splits/train
+    nuclei_path: /mnt/data/Projects/inflammatory_bowel_dissease/ulcerative_colitis/data_tiff/nuclei/40x/all/results/nuclei
+
+metadata:
+  run_name: Test training
+  description: Test training of the model on the given dataset

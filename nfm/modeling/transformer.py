@@ -109,7 +109,6 @@ class Transformer(nn.Module):
 
     def forward(
         self,
-        tgt: Tensor,
         src: Tensor,
         tgt_pos: Tensor,
         src_pos: Tensor,
@@ -118,16 +117,18 @@ class Transformer(nn.Module):
         """Forward pass of the Transformer model.
 
         Args:
-            tgt: Target sequence of shape (b, n, d)
             src: Source sequence of shape (b, m, d)
             tgt_pos: Target positions of shape (b, n, 2)
             src_pos: Source positions of shape (b, m, 2)
+            local_crops: Whether local crops are used (affects normalization of cls token)
 
         Returns:
             A dictionary containing:
                 - "cls_token": The class token of shape (b, d)
                 - "patch_tokens": The patch tokens of shape (b, n, d)
         """
+        tgt = torch.ones(src.shape[0], tgt_pos.shape[1], src.shape[2]).to(src)
+
         cls_tokens = repeat(self.cls_token, "d -> b 1 d", b=tgt.shape[0])
         tgt = torch.cat((cls_tokens, tgt), dim=1)
         tgt_pos = torch.cat((torch.zeros_like(tgt_pos[:, :1]), tgt_pos), dim=1)
