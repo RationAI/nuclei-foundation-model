@@ -1,5 +1,7 @@
 import heapq
+import itertools
 import random
+from collections.abc import Container, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -12,47 +14,43 @@ from torch.utils.data import Dataset
 
 
 type AdjacencyGraph = list[list[tuple[int, float]]]
+type Sample = dict[str, tuple[NDArray, NDArray] | NDArray[np.float32]]
 
 
-class NucleiDataset(Dataset):
+class NucleiDataset(Dataset[Sample]):
     def __init__(
         self,
-        slides_path: Path = Path(
-            "/mnt/data/Projects/inflammatory_bowel_dissease/ulcerative_colitis/data_tiff/nuclei/40x/splits/train"
-        ),
-        nuclei_path: Path = Path(
-            "/mnt/data/Projects/inflammatory_bowel_dissease/ulcerative_colitis/data_tiff/nuclei/40x/all/results/nuclei"
-        ),
-        global_crop_k: int = 4096,  # 4096,
-        local_crop_k: int = 768,  # 768,
-        local_crop_tokens: int = 48,
-        global_crop_tokens: int = 256,
-        n_local_crops: int = 8,  # 8,
+        slides_path: str | Path,
+        nuclei_path: str | Path,
+        global_crop_k: int = 4096,
+        local_crop_k: int = 768,
+        n_global_crops: int = 2,
+        n_local_crops: int = 8,
+        n_local_spatial_registers: int = 48,
+        n_global_spatial_registers: int = 256,
         alpha: float = 0.8,
         target_mpp: float = 0.25,
     ) -> None:
         self.slides = pd.read_parquet(slides_path)
-        self.nuclei_path = nuclei_path
+        self.nuclei_path = Path(nuclei_path)
         self.global_crop_k = global_crop_k
         self.local_crop_k = local_crop_k
-        self.global_crop_tokens = global_crop_tokens
-        self.local_crop_tokens = local_crop_tokens
+        self.n_global_crops = n_global_crops
         self.n_local_crops = n_local_crops
+        self.n_local_spatial_registers = n_local_spatial_registers
+        self.n_global_spatial_registers = n_global_spatial_registers
         self.alpha = alpha
         self.target_mpp = target_mpp
 
     def __len__(self) -> int:
         return len(self.slides)
 
-    def _get_tokens(
-        self, points: NDArray, centroids: NDArray, token_count: int
-    ) -> NDArray:
+    def _sample_spatial_registers(
+        self, points: np.ndarray, n_samples: int
+    ) -> NDArray[np.float32]:
         kde = KernelDensity(bandwidth=0.5, kernel="gaussian")
         kde.fit(points)
-        tokens = kde.sample(token_count)
-        distances = np.linalg.norm(centroids[:, None, :] - tokens[None, :, :], axis=2)
-        indices = np.argmin(distances, axis=0)
-        return indices
+        return kde.sample(n_samples)
 
     def _build_graph(self, points: NDArray[np.uint32]) -> AdjacencyGraph:
         tri = Delaunay(points)
@@ -73,8 +71,8 @@ class NucleiDataset(Dataset):
         idx: int,
         k: int,
         graph: AdjacencyGraph,
-        centroids: NDArray[np.float32],
-        indices: NDArray[np.uint32] | None = None,
+        centroids: Sequence[float],
+        indices: Container[int] | None = None,
     ) -> list[int]:
         component_indices = []
         in_component = np.zeros(len(centroids), dtype=np.bool)
@@ -105,85 +103,55 @@ class NucleiDataset(Dataset):
 
         return centroids * (scale_x, scale_y)
 
-    def __getitem__(self, idx: int) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
         df = pd.read_parquet(self.nuclei_path / f"slide_id={slide['slide_id']}")
 
         centroids = self._normalize(np.stack(df.centroid.values), slide)
-        embeddings = np.stack(df.embedding.values)
-
-        # assert len(centroids) >= self.global_crop_k
-        if len(centroids) < self.global_crop_k:
-            slide = self.slides.iloc[0]
-            df = pd.read_parquet(self.nuclei_path / f"slide_id={slide['slide_id']}")
-
-            centroids = self._normalize(np.stack(df.centroid.values), slide)
-            embeddings = np.stack(df.embedding.values)
-
         graph = self._build_graph(centroids)
 
-        # Global crop token generation
-        global_crops = []
+        # assert len(centroids) >= self.global_crop_k
+        # if len(centroids) < self.global_crop_k:
+        #     pass
+
+        # Global crops generation
+        global_crops: list[list[int]] = []
         seed = random.randint(0, len(centroids) - 1)
-        global_crops.append(
-            self._find_component(seed, self.global_crop_k, graph, centroids)
-        )
+        for _ in range(self.n_global_crops):
+            crop = self._find_component(seed, self.global_crop_k, graph, centroids)
+            global_crops.append(crop)
+            seed_idx = int(random.triangular(0, len(crop) - 1, len(crop) * 0.8))
+            seed = crop[seed_idx]
 
-        seed = int(
-            random.triangular(0, self.global_crop_k - 1, self.global_crop_k * 0.8)
-        )
-        global_crops.append(
-            self._find_component(
-                global_crops[0][seed], self.global_crop_k, graph, centroids
+        global_spatial_registers = [
+            self._sample_spatial_registers(
+                centroids[crop], self.n_global_spatial_registers
             )
-        )
-
-        # Global crop token generation
-        global_tokens = [
-            self._get_tokens(centroids[crop], centroids, self.global_crop_tokens)
             for crop in global_crops
         ]
 
         # Local crop generation
-        local_crops = []
-        for i, g_tokens in enumerate(global_tokens):
-            crops = []
-            tokens = np.random.choice(g_tokens, size=self.n_local_crops, replace=False)
-            crops = [
-                self._find_component(
-                    token, self.local_crop_k, graph, centroids, global_crops[i]
-                )
-                for token in tokens
-            ]
-            local_crops.append(crops)
+        all_global_crops = list(set(itertools.chain.from_iterable(global_crops)))
+        crops = np.random.choice(
+            all_global_crops, size=self.n_local_crops, replace=False
+        )
+        local_crops = [
+            self._find_component(
+                crop, self.local_crop_k, graph, centroids, all_global_crops
+            )
+            for crop in crops
+        ]
 
-        # Local crop token generation
-        local_tokens = []
-        for crops in local_crops:
-            tokens = [
-                self._get_tokens(centroids[crop], centroids, self.local_crop_tokens)
-                for crop in crops
-            ]
-            local_tokens.append(tokens)
+        local_spatial_registers = [
+            self._sample_spatial_registers(
+                centroids[crop], self.n_local_spatial_registers
+            )
+            for crop in local_crops
+        ]
 
         return {
             "global_crops": (centroids[global_crops], embeddings[global_crops]),
             "local_crops": (centroids[local_crops], embeddings[local_crops]),
-            "global_crop_tokens": (centroids[global_tokens], embeddings[global_tokens]),
-            "local_crop_tokens": (centroids[local_tokens], embeddings[local_tokens]),
+            "global_spatial_registers": global_spatial_registers,
+            "local_spatial_registers": local_spatial_registers,
         }
-
-
-# import time
-
-
-# print("start")
-# ds = NucleiDataset()
-# start = time.time()
-# item = ds[0]
-
-# print(item["local_crops"][0].shape)
-
-
-# print("time", time.time() - start)
-# print(item.keys())

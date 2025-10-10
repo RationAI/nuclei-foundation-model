@@ -46,7 +46,7 @@ class SSLMetaArch(LightningModule):
 
         self.dino_loss = DINOLoss()
         self.koleo_loss = KoLeoLoss()
-        self.ibot_patch_loss = iBOTPatchLoss(patch_out_dim=self.config.dim)
+        self.ibot_patch_loss = iBOTPatchLoss()
 
     def setup(self, stage: str) -> None:
         # self.trainer.num_training_batches is inf for some reason
@@ -59,129 +59,121 @@ class SSLMetaArch(LightningModule):
                 start_warmup_value=0.04,
             )
 
-    def batch_forward_backbone(
-        self,
-        backbone: nn.Module,
-        crops: tuple[Tensor, Tensor],
-        tokens: tuple[Tensor, Tensor],
-        local_crops: bool = False,
-    ) -> dict[str, Tensor]:
-        args = {"b": crops[0].shape[0]}
-        pattern = "b n ... -> (b n) ..."
-        reverse = "(b n) ... -> b n ..."
-        if local_crops:
-            args["n"] = crops[0].shape[1]
-            pattern = "b n l ... -> (b n l) ..."
-            reverse = "(b n l) ... -> b n l ..."
-
-        pos, embed = crops
-        token_pos, token_embed = tokens
-
-        embed = rearrange(embed, pattern)
-        pos = rearrange(pos, pattern)
-        token_embed = rearrange(token_embed, pattern)
-        token_pos = rearrange(token_pos, pattern)
-
-        outputs = backbone(token_embed, embed, token_pos, pos, local_crops)
-
-        outputs["patch_tokens"] = rearrange(outputs["patch_tokens"], reverse, **args)
-        outputs["cls_token"] = rearrange(outputs["cls_token"], reverse, **args)
-
-        return outputs
-
     def student_forward(self, batch: dict[str, Any]) -> dict[str, Tensor]:
-        local_outputs = self.batch_forward_backbone(
-            self.student.backbone,
-            batch["local_crops"],
-            batch["local_crop_tokens"],
+        pattern = "b n ... -> (b n) ..."
+
+        pos, embed = batch["local_crops"]
+        local_outputs = self.student.backbone(
+            src=rearrange(embed, pattern),
+            tgt_pos=rearrange(batch["local_spatial_registers"], pattern),
+            src_pos=rearrange(pos, pattern),
             local_crops=True,
         )
-        local_cls_logits = self.student.dino_head(local_outputs["cls_token"])
 
-        global_outputs = self.batch_forward_backbone(
-            self.student.backbone,
-            batch["global_crops"],
-            batch["global_crop_tokens"],
+        pos, embed = batch["global_crops"]
+        global_outputs = self.student.backbone(
+            src=rearrange(embed, pattern),
+            tgt_pos=rearrange(batch["global_spatial_registers"], pattern),
+            src_pos=rearrange(pos, pattern),
         )
-        global_patch_logits = self.student.ibot_head(global_outputs["patch_tokens"])
+
+        local_cls_logits = self.student.dino_head(local_outputs["cls_token"])
         global_cls_logits = self.student.dino_head(global_outputs["cls_token"])
+        global_patch_logits = self.student.ibot_head(global_outputs["patch_tokens"])
 
         return {
-            "local_cls_logits": local_cls_logits,
-            "global_cls_tokens": global_outputs["cls_token"],
-            "global_cls_logits": global_cls_logits,
-            "global_patch_logits": global_patch_logits,
+            "local_cls_logits": rearrange(
+                local_cls_logits, "(b n) d -> b n d", b=pos.shape[0]
+            ),
+            "global_cls_tokens": rearrange(
+                global_outputs["cls_token"], "(b n) d -> b n d", b=pos.shape[0]
+            ),
+            "global_cls_logits": rearrange(
+                global_cls_logits, "(b n) d -> b n d", b=pos.shape[0]
+            ),
+            "global_patch_logits": rearrange(
+                global_patch_logits, "(b n) d -> b n d", b=pos.shape[0]
+            ),
         }
 
     @torch.inference_mode()
     def teacher_forward(self, batch: dict[str, Any]) -> dict[str, Tensor]:
-        outputs = self.batch_forward_backbone(
-            self.teacher.backbone,
-            batch["global_crops"],
-            batch["global_crop_tokens"],
+        pattern = "b n ... -> (b n) ..."
+        pos, embed = batch["global_crops"]
+        outputs = self.teacher.backbone(
+            src=rearrange(embed, pattern),
+            tgt_pos=rearrange(batch["global_spatial_registers"], pattern),
+            src_pos=rearrange(pos, pattern),
         )
 
         # iBOT
-        ibot_patch_tokens = self.teacher.ibot_head(outputs["patch_tokens"])
-
-        n_masked_patches_tensor = (
-            ibot_patch_tokens.shape[0]
-            * ibot_patch_tokens.shape[1]
-            * ibot_patch_tokens.shape[2]
-        )
-        ibot_patch_tokens = self.ibot_patch_loss.sinkhorn_knopp_teacher(
-            ibot_patch_tokens,
-            teacher_temp=self.teacher_temp[self.global_step],
-            n_masked_patches_tensor=n_masked_patches_tensor,
+        ibot_patch = self.teacher.ibot_head(outputs["patch_tokens"])
+        ibot_patch_centered = self.ibot_patch_loss.sinkhorn_knopp_teacher(
+            ibot_patch, self.teacher_temp[self.global_step]
         )
 
         # DINO
-        cls_tokens = outputs["cls_token"].flip(
-            0
-        )  # reverse so A is matched to B in the global crops dino loss
-        cls_tokens = self.teacher.dino_head(cls_tokens)
-        cls_tokens = self.dino_loss.sinkhorn_knopp_teacher(
-            cls_tokens,
-            teacher_temp=self.teacher_temp[self.global_step],
-        ).permute(1, 0, 2)
-        # .view(n_global_crops, -1, *cls_tokens.shape[1:])
-
-        # cls_tokens = rearrange(cls_tokens, "b n c -> (b n) c")
+        cls = self.teacher.dino_head(outputs["cls_token"])
+        cls_centered = self.dino_loss.sinkhorn_knopp_teacher(
+            cls, self.teacher_temp[self.global_step]
+        )
+        cls_centered = rearrange(cls_centered, "(b n) d -> b n d", b=pos.shape[0])
 
         return {
-            "global_cls_logits": cls_tokens,
-            "global_patch_logits": ibot_patch_tokens,
+            "global_cls_logits": cls_centered,
+            "global_patch_logits": ibot_patch_centered,
         }
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
+        n_global_crops = batch["global_spatial_registers"].shape[1]
+        n_local_crops = batch["local_spatial_registers"].shape[1]
+
+        dino_global_terms = n_global_crops * (n_global_crops - 1)
+        dino_local_terms = n_global_crops * n_local_crops
+        dino_global_scale = dino_global_terms / (dino_global_terms + dino_local_terms)
+        dino_local_scale = dino_local_terms / (dino_global_terms + dino_local_terms)
+
         outputs = self.student_forward(batch)
         targets = self.teacher_forward(batch)
 
-        ibot_loss = self.ibot_patch_loss.forward_masked(
+        ibot_loss = self.ibot_patch_loss(
             outputs["global_patch_logits"],
             targets["global_patch_logits"],
         )
-        dino_loss = self.dino_loss(
-            outputs["global_cls_logits"],
+        dino_local_loss = self.dino_loss(
+            outputs["local_cls_logits"],
             targets["global_cls_logits"],
         )
+        dino_global_loss = self.dino_loss(
+            outputs["global_cls_logits"],
+            targets["global_cls_logits"],
+            ignore_diagonal=True,
+        )
         koleo_loss = self.koleo_loss(outputs["global_cls_tokens"])
+        total_loss = (
+            ibot_loss * self.ibot_loss_weight
+            + dino_local_loss * dino_local_scale * self.dino_loss_weight
+            + dino_global_loss * dino_global_scale * self.dino_loss_weight
+            + koleo_loss * self.koleo_loss_weight
+        )
 
         self.log(
-            "train/dino_loss",
-            dino_loss,
-            sync_dist=True,
-            prog_bar=True,
-            rank_zero_only=True,
+            "train/dino_loss", dino_local_loss, sync_dist=True, rank_zero_only=True
+        )
+        self.log(
+            "train/dino_loss", dino_global_loss, sync_dist=True, rank_zero_only=True
         )
         self.log("train/ibot_loss", ibot_loss, sync_dist=True, rank_zero_only=True)
         self.log("train/koleo_loss", koleo_loss, sync_dist=True, rank_zero_only=True)
-
-        return (
-            ibot_loss * self.ibot_loss_weight
-            + dino_loss * self.dino_loss_weight
-            + koleo_loss * self.koleo_loss_weight
+        self.log(
+            "train/total_loss",
+            total_loss,
+            sync_dist=True,
+            rank_zero_only=True,
+            prog_bar=True,
         )
+
+        return total_loss
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
         optimizer = torch.optim.AdamW(
