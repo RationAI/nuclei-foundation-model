@@ -24,7 +24,7 @@ STRIDE = TILE_EXTENT - OVERLAP
 
 def get_log_file(organ: str, dataset: str, slide_id: str) -> Path:
     log_file = (
-        Path(OUTPUT_NUCLEI)
+        Path(OUTPUT_SLIDES)
         / f"organ={organ}"
         / f"dataset={dataset}"
         / f"{slide_id}.log"
