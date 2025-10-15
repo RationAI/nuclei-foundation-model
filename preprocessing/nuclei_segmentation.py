@@ -127,14 +127,23 @@ class Model:
         )
         outputs = self.model(**inputs)
 
+        labels = outputs["logits"].argmax(dim=-1)
+        non_no_object_indices = labels != outputs["logits"].size(-1) - 1
+
         return {
             "slide_id": batch["slide_id"],
             "organ": batch["organ"],
             "dataset": batch["dataset"],
             "tile_x": batch["tile_x"],
             "tile_y": batch["tile_y"],
-            "radial_distances": outputs["radial_distances"].cpu().numpy(),
-            "points": outputs["points"].cpu().numpy(),
+            "radial_distances": [
+                outputs["radial_distances"][b, indices].expm1().cpu().numpy()
+                for b, indices in enumerate(non_no_object_indices)
+            ],
+            "points": [
+                outputs["absolute_points"][b, indices].cpu().numpy()
+                for b, indices in enumerate(non_no_object_indices)
+            ],
         }
 
 
