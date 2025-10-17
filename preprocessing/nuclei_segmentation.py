@@ -152,9 +152,9 @@ def filter_tissue_tiles(row: dict[str, Any]) -> bool:
         return True
 
     log_file = get_log_file(
-        organ=row["organ"], dataset=row["dataset"], slide_id=row["id"]
+        organ=row["organ"], dataset=row["dataset"], slide_id=row["slide_id"]
     )
-    with open(log_file / f"{row['slide_id']}.log", "a") as f:
+    with open(log_file, "a") as f:
         f.write(f"{row['tile_x']} {row['tile_y']}\n")
 
     return False
@@ -168,6 +168,14 @@ def drop_duplicates(row: dict[str, Any]) -> Iterator[dict[str, Any]]:
     offset = np.array((row["tile_x"], row["tile_y"]), dtype=np.float32)
     radial_distances = row["radial_distances"][keep]
     points = row["points"][keep] + offset
+
+    if len(radial_distances) == 0:
+        log_file = get_log_file(
+            organ=row["organ"], dataset=row["dataset"], slide_id=row["slide_id"]
+        )
+        with open(log_file, "a") as f:
+            f.write(f"{row['tile_x']} {row['tile_y']}\n")
+        return
 
     for radial_distances, points in zip(radial_distances, points, strict=True):
         yield {
