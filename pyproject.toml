@@ -2,7 +2,7 @@
 name = "nfm"
 version = "0.1.0"
 authors = [{ name = "Matěj Pekár", email = "matejpekar@mail.muni.cz" }]
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.14"
 readme = "README.md"
 license = { file = "LICENSE" }
 dependencies = [
@@ -20,12 +20,10 @@ dependencies = [
     "transformers>=4.53.0",
     "deepspeed>=0.17.2",
     "shapely>=2.1.1",
-    "graph_pytorch_ext",
+    "degraph",
+    "mlflow<3.0",
     "ratiopath>=1.0.1",
 ]
-
-[dependency-groups]
-dev = ["mypy", "ruff"]
 
 
 [tool.uv.sources]
@@ -35,7 +33,7 @@ pytorch-triton-rocm = [
     { index = "pytorch-rocm", marker = "sys_platform == 'linux'" },
 ]
 rationai-mlkit = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/mlkit.git" }
-graph_pytorch_ext = { path = "lib/graph_pytorch_ext" }
+degraph = { path = "lib/degraph" }
 
 [[tool.uv.index]]
 name = "pytorch-rocm"
