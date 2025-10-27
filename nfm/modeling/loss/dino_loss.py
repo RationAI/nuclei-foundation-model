@@ -59,6 +59,7 @@ class DINOLoss(nn.Module):
         Args:
             student_logits: [batch, student crops, prototypes]
             teacher_probs:  [batch, teacher crops, prototypes] must sum to 1 over the last dim
+            ignore_diagonal: Whether to ignore the diagonal elements in the loss computation.
         """
         student_logits = student_logits.float()
         student_logits = F.log_softmax(student_logits / self.student_temp, dim=-1)

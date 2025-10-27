@@ -37,6 +37,8 @@ extend-ignore = [
     "N812",   # lowercase imported as non lowercase
     "TC002", # move third-party into a type-checking block
     "F722", # jaxtyping
+    "N801", # class name lowercase
+    "B020" # local variable shadowing built-in
 ]
 
 [lint.flake8-tidy-imports]

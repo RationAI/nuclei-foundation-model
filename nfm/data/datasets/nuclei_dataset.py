@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 from sklearn.neighbors import KernelDensity
 from torch.utils.data import Dataset
 
+
 type Sample = dict[
     str, tuple[NDArray[np.float32], NDArray[np.float32]] | NDArray[np.float32]
 ]
