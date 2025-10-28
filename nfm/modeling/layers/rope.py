@@ -40,11 +40,11 @@ class RoPE(nn.Module):
         px = self.P(x.float())
 
         # apply RoPE-Mixed
-        freqs = positions.to(self.freqs.dtype) @ self.freqs
+        freqs = positions.to(self.freqs) @ self.freqs
         freqs_cis = rearrange(
             torch.polar(torch.ones_like(freqs), freqs), "b n c -> b 1 n c"
         )
         px_ = torch.view_as_complex(rearrange(px, "... (d two) -> ... d two", two=2))
         out = rearrange(torch.view_as_real(px_ * freqs_cis), "... d two -> ... (d two)")
 
-        return out.type_as(x)
+        return out.to(x)
