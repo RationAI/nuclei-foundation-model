@@ -8,9 +8,10 @@ import numpy as np
 import pandas as pd
 from degraph import build_spatial_graph
 from numpy.typing import NDArray
-from sklearn.neighbors import KernelDensity
+from sklearn.cluster import KMeans
 from torch.utils.data import Dataset
 
+from nfm.data.efd import elliptic_fourier_descriptors
 
 type Sample = dict[
     str, tuple[NDArray[np.float32], NDArray[np.float32]] | NDArray[np.float32]
@@ -29,6 +30,7 @@ class NucleiDataset(Dataset[Sample]):
         n_local_spatial_registers: int = 48,
         n_global_spatial_registers: int = 256,
         alpha: float = 0.85,
+        efd_order: int = 10,
     ) -> None:
         self.slides = pd.read_parquet(slides_path)
         self.nuclei_path = Path(nuclei_path)
@@ -39,18 +41,19 @@ class NucleiDataset(Dataset[Sample]):
         self.n_local_spatial_registers = n_local_spatial_registers
         self.n_global_spatial_registers = n_global_spatial_registers
         self.alpha = alpha
+        self.efd_order = efd_order
 
     def __len__(self) -> int:
         return len(self.slides)
 
-    def _sample_spatial_registers(
+    def sample_spatial_registers(
         self, points: np.ndarray, n_samples: int
     ) -> NDArray[np.float32]:
-        kde = KernelDensity(bandwidth=0.5, kernel="gaussian")
-        kde.fit(points)
-        return kde.sample(n_samples)
+        kmeans = KMeans(n_clusters=n_samples)
+        kmeans.fit(points)
+        return kmeans.cluster_centers_
 
-    def _find_component(
+    def find_component(
         self,
         idx: int,
         k: int,
@@ -81,70 +84,88 @@ class NucleiDataset(Dataset[Sample]):
 
         return component_indices
 
-    def _get_polygons(self, df: pd.DataFrame) -> NDArray[np.float32]:
-        radial_distances = np.stack(df.radial_distances.values)
-        points = np.stack(df.points.values)
-
+    def radial_to_efd(
+        self,
+        points: NDArray[np.float32],
+        radial_distances: NDArray[np.float32],
+        mpp_x: float,
+        mpp_y: float,
+    ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
         t = np.linspace(0, 1, radial_distances.shape[-1] + 1, dtype=np.float32)[:-1]
         cos = np.cos(2 * np.pi * t)
         sin = np.sin(2 * np.pi * t)
 
         polar = radial_distances[..., None] * np.stack([sin, cos], axis=-1)
-        return points[:, None] + polar
+        polygons = points[:, None] + polar
+
+        polygons[..., 0] *= mpp_x
+        polygons[..., 1] *= mpp_y
+
+        centroids = polygons.mean(axis=1)
+        efd = elliptic_fourier_descriptors(polygons, self.efd_order)
+
+        return centroids, efd
 
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
         df = pd.read_parquet(self.nuclei_path / f"slide_id={slide['slide_id']}.parquet")
 
-        polygons = self._get_polygons(df)
-        polygons[..., 0] *= slide["mpp_x"]
-        polygons[..., 1] *= slide["mpp_y"]
-
-        centroids = polygons.mean(axis=1)
-        graph = build_spatial_graph(centroids)
+        points = np.stack(df.points.values)
+        graph = build_spatial_graph(points)
 
         # Global crops generation
-        global_crops: list[list[int]] = []
-        seed = random.randint(0, len(centroids) - 1)
+        global_crops_indices: list[list[int]] = []
+        seed = random.randint(0, len(points) - 1)
         for _ in range(self.n_global_crops):
-            crop = self._find_component(seed, self.global_crop_k, graph, centroids)
-            global_crops.append(crop)
-            seed_idx = int(random.triangular(0, len(crop) - 1, len(crop) * 0.9))
-            seed = crop[seed_idx]
-
-        global_spatial_registers = np.stack(
-            [
-                self._sample_spatial_registers(
-                    centroids[crop], self.n_global_spatial_registers
-                )
-                for crop in global_crops
-            ]
-        )
+            indices = self.find_component(seed, self.global_crop_k, graph, points)
+            global_crops_indices.append(indices)
+            seed_idx = int(random.triangular(0, len(indices) - 1, len(indices) * 0.9))
+            seed = indices[seed_idx]
 
         # Local crop generation
-        all_global_crops = list(set(itertools.chain.from_iterable(global_crops)))
-        crops = np.random.choice(
-            all_global_crops, size=self.n_local_crops, replace=False
-        )
-        local_crops = [
-            self._find_component(
-                crop, self.local_crop_k, graph, centroids, set(all_global_crops)
-            )
-            for crop in crops
+        all_indices_set = set(itertools.chain.from_iterable(global_crops_indices))
+        all_indices = list(all_indices_set)
+        index_map = {k: v for v, k in enumerate(all_indices)}
+        global_crops_indices = [
+            [index_map[i] for i in crop] for crop in global_crops_indices
         ]
 
-        local_spatial_registers = np.stack(
+        local_crops_indices = [
             [
-                self._sample_spatial_registers(
-                    centroids[crop], self.n_local_spatial_registers
+                index_map[i]
+                for i in self.find_component(
+                    seed, self.local_crop_k, graph, points, indices=all_indices_set
                 )
-                for crop in local_crops
             ]
+            for seed in np.random.choice(all_indices, self.n_local_crops, replace=False)
+        ]
+
+        centroids, efds = self.radial_to_efd(
+            points[all_indices],
+            np.stack(df.radial_distances.values[all_indices]),
+            mpp_x=slide.mpp_x,
+            mpp_y=slide.mpp_y,
         )
 
         return {
-            "global_crops": (centroids[global_crops], polygons[global_crops]),
-            "local_crops": (centroids[local_crops], polygons[local_crops]),
-            "global_spatial_registers": global_spatial_registers,
-            "local_spatial_registers": local_spatial_registers,
+            "global_crops": (
+                centroids[global_crops_indices],
+                efds[global_crops_indices],
+            ),
+            "local_crops": (
+                centroids[local_crops_indices],
+                efds[local_crops_indices],
+            ),
+            "global_spatial_registers": np.stack(
+                [
+                    self.sample_spatial_registers(c, self.n_global_spatial_registers)
+                    for c in centroids[global_crops_indices]
+                ]
+            ),
+            "local_spatial_registers": np.stack(
+                [
+                    self.sample_spatial_registers(c, self.n_local_spatial_registers)
+                    for c in centroids[local_crops_indices]
+                ]
+            ),
         }
