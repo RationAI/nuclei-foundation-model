@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 
@@ -27,10 +28,10 @@ class DINOHead(nn.Module):
 
         self.apply(self.init_weights)
 
-        self.last_layer = nn.utils.weight_norm(
+        self.last_layer = nn.utils.parametrizations.weight_norm(
             nn.Linear(bottleneck_dim, num_prototypes, bias=False)
         )
-        self.last_layer.weight_g.data.fill_(1)
+        self.last_layer.parametrizations.weight.original0.data.fill_(1)
 
     def init_weights(self, m: nn.Module) -> None:
         if isinstance(m, nn.Linear):
@@ -40,5 +41,5 @@ class DINOHead(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.mlp(x)
-        x = nn.functional.normalize(x, dim=-1, p=2, eps=torch.finfo(x.dtype).eps)
+        x = F.normalize(x, dim=-1, p=2, eps=torch.finfo(x.dtype).eps)
         return self.last_layer(x)

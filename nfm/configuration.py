@@ -14,7 +14,7 @@ class Config(PretrainedConfig):
         num_cross_layers: int = 24,
         num_self_layers: int = 24,
         rope_theta: float = 10000,
-        efd_order: int = 10,
+        efd_order: int = 16,
         **kwargs: Any,
     ) -> None:
         self.dim = dim

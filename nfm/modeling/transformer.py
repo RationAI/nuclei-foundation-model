@@ -97,6 +97,9 @@ class Transformer(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
 
+        self.bn = nn.BatchNorm1d(4 * config.efd_order, affine=False)
+        self.polygon_proj = nn.Linear(4 * config.efd_order, config.dim)
+
         self.cross_layers = nn.ModuleList(
             CrossLayer(config) for _ in range(config.num_cross_layers)
         )
@@ -127,10 +130,12 @@ class Transformer(nn.Module):
                 - "cls_token": The class token of shape (b, d)
                 - "patch_tokens": The patch tokens of shape (b, n, d)
         """
-        tgt = torch.ones(src.shape[0], tgt_pos.shape[1], src.shape[2]).to(src)
+        src = self.polygon_proj(self.bn(src.permute(0, 2, 1)).permute(0, 2, 1))
 
+        tgt = torch.ones(src.shape[0], tgt_pos.shape[1], src.shape[2]).to(src)
         cls_tokens = repeat(self.cls_token, "d -> b 1 d", b=tgt.shape[0])
         tgt = torch.cat((cls_tokens, tgt), dim=1)
+
         tgt_pos = torch.cat((torch.zeros_like(tgt_pos[:, :1]), tgt_pos), dim=1)
 
         for layer in self.cross_layers:
@@ -146,7 +151,4 @@ class Transformer(nn.Module):
         else:
             cls_token = self.norm(tgt[:, 0])
 
-        return {
-            "cls_token": cls_token,
-            "patch_tokens": patch_tokens,
-        }
+        return {"cls_token": cls_token, "patch_tokens": patch_tokens}

@@ -20,9 +20,6 @@ class DataModule(LightningDataModule):
         match stage:
             case "fit":
                 self.train = instantiate(self.datasets["train"])
-                self.val = instantiate(self.datasets["val"])
-            case "validate":
-                self.val = instantiate(self.datasets["val"])
             case "test":
                 self.test = instantiate(self.datasets["test"])
 
@@ -32,14 +29,6 @@ class DataModule(LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
-            num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0,
-        )
-
-    def val_dataloader(self) -> Iterable[dict[str, Tensor]]:
-        return DataLoader(
-            self.val,
-            batch_size=self.batch_size,
             num_workers=self.num_workers,
             persistent_workers=self.num_workers > 0,
         )
