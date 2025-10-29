@@ -1,7 +1,6 @@
 from random import randint
 
 import hydra
-import torch
 from lightning import seed_everything
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig, OmegaConf
@@ -10,7 +9,6 @@ from rationai.mlkit import Trainer, autolog
 from nfm.data import DataModule
 from nfm.ssl_meta_arch import SSLMetaArch
 
-
 OmegaConf.register_new_resolver(
     "random_seed", lambda: randint(0, 2**31), use_cache=True
 )
@@ -18,8 +16,7 @@ OmegaConf.register_new_resolver(
 
 @hydra.main(config_path="../configs", config_name="default", version_base=None)
 @autolog
-def main(config: DictConfig, logger: Logger | None) -> None:
-    torch.set_float32_matmul_precision("high")
+def main(config: DictConfig, logger: Logger | None = None) -> None:
     seed_everything(config.seed, workers=True)
 
     data = hydra.utils.instantiate(

@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 import torch
@@ -6,7 +7,6 @@ from einops import rearrange
 from lightning import LightningModule
 from lightning.pytorch.core.optimizer import LightningOptimizer
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
-from omegaconf import DictConfig
 from torch import Tensor, nn
 from torch.optim import Optimizer
 
@@ -19,7 +19,11 @@ from nfm.utils import CosineScheduler
 
 class SSLMetaArch(LightningModule):
     def __init__(
-        self, ema_momentum: float, dino: DictConfig, ibot: DictConfig, **config: Any
+        self,
+        ema_momentum: float,
+        dino: dict[str, Any],
+        ibot: dict[str, Any],
+        **config: Any,
     ) -> None:
         super().__init__()
         self.config = Config(**config)
@@ -43,6 +47,8 @@ class SSLMetaArch(LightningModule):
             }
         )
         self.teacher.eval()
+        for p in self.teacher.parameters():
+            p.requires_grad = False
 
         self.dino_loss = DINOLoss()
         self.koleo_loss = KoLeoLoss()
@@ -81,33 +87,28 @@ class SSLMetaArch(LightningModule):
         global_cls_logits = self.student.dino_head(global_outputs["cls_token"])
         global_patch_logits = self.student.ibot_head(global_outputs["patch_tokens"])
 
+        revert_shape = partial(
+            rearrange, pattern="(b n) ... -> b n ...", b=pos.shape[0]
+        )
         return {
-            "local_cls_logits": rearrange(
-                local_cls_logits, "(b n) d -> b n d", b=pos.shape[0]
-            ),
-            "global_cls_tokens": rearrange(
-                global_outputs["cls_token"], "(b n) d -> b n d", b=pos.shape[0]
-            ),
-            "global_cls_logits": rearrange(
-                global_cls_logits, "(b n) d -> b n d", b=pos.shape[0]
-            ),
-            "global_patch_logits": rearrange(
-                global_patch_logits, "(b n) d -> b n d", b=pos.shape[0]
-            ),
+            "local_cls_logits": revert_shape(local_cls_logits),
+            "global_cls_tokens": revert_shape(global_outputs["cls_token"]),
+            "global_cls_logits": revert_shape(global_cls_logits),
+            "global_patch_logits": revert_shape(global_patch_logits),
         }
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def teacher_forward(self, batch: dict[str, Any]) -> dict[str, Tensor]:
-        pattern = "b n ... -> (b n) ..."
         pos, embed = batch["global_crops"]
         outputs = self.teacher.backbone(
-            src=rearrange(embed, pattern),
-            tgt_pos=rearrange(batch["global_spatial_registers"], pattern),
-            src_pos=rearrange(pos, pattern),
+            src=embed.flatten(0, 1),
+            tgt_pos=batch["global_spatial_registers"].flatten(0, 1),
+            src_pos=pos.flatten(0, 1),
         )
 
         # iBOT
-        ibot_patch = self.teacher.ibot_head(outputs["patch_tokens"])
+        patch_tokens = rearrange(outputs["patch_tokens"], "bn k d -> (bn k) d")
+        ibot_patch = self.teacher.ibot_head(patch_tokens)
         ibot_patch_centered = self.ibot_patch_loss.sinkhorn_knopp_teacher(
             ibot_patch, self.teacher_temp[self.global_step]
         )
@@ -121,7 +122,12 @@ class SSLMetaArch(LightningModule):
 
         return {
             "global_cls_logits": cls_centered,
-            "global_patch_logits": ibot_patch_centered,
+            "global_patch_logits": rearrange(
+                ibot_patch_centered,
+                "(b n k) c -> b n k c",
+                b=pos.shape[0],
+                n=embed.shape[1],
+            ),
         }
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
@@ -150,6 +156,7 @@ class SSLMetaArch(LightningModule):
             ignore_diagonal=True,
         )
         koleo_loss = self.koleo_loss(outputs["global_cls_tokens"])
+
         total_loss = (
             ibot_loss * self.ibot_loss_weight
             + dino_local_loss * dino_local_scale * self.dino_loss_weight
@@ -157,28 +164,27 @@ class SSLMetaArch(LightningModule):
             + koleo_loss * self.koleo_loss_weight
         )
 
-        self.log(
-            "train/dino_loss", dino_local_loss, sync_dist=True, rank_zero_only=True
-        )
-        self.log(
-            "train/dino_loss", dino_global_loss, sync_dist=True, rank_zero_only=True
-        )
-        self.log("train/ibot_loss", ibot_loss, sync_dist=True, rank_zero_only=True)
-        self.log("train/koleo_loss", koleo_loss, sync_dist=True, rank_zero_only=True)
-        self.log(
-            "train/total_loss",
-            total_loss,
-            sync_dist=True,
-            rank_zero_only=True,
-            prog_bar=True,
-        )
+        self.log("train/dino_loss", dino_local_loss, rank_zero_only=True)
+        self.log("train/dino_loss", dino_global_loss, rank_zero_only=True)
+        self.log("train/ibot_loss", ibot_loss, rank_zero_only=True)
+        self.log("train/koleo_loss", koleo_loss, rank_zero_only=True)
+        self.log("train/total_loss", total_loss, rank_zero_only=True, prog_bar=True)
 
         return total_loss
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
-        optimizer = torch.optim.AdamW(
-            self.student.parameters(), lr=0.0004, weight_decay=0.04
-        )
+        no_decay_params = [
+            w
+            for n, w in self.student.named_parameters()
+            if w.ndim == 1 or ".rope." in n
+        ]
+        decay_params = list(set(self.student.parameters()).difference(no_decay_params))
+        params = [
+            {"params": decay_params},
+            {"params": no_decay_params, "weight_decay": 0},
+        ]
+
+        optimizer = torch.optim.AdamW(params, lr=0.0004, weight_decay=0.04)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             T_max=self.trainer.max_epochs * self.trainer.num_training_batches,

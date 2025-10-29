@@ -30,7 +30,7 @@ class NucleiDataset(Dataset[Sample]):
         n_local_spatial_registers: int = 48,
         n_global_spatial_registers: int = 256,
         alpha: float = 0.85,
-        efd_order: int = 10,
+        efd_order: int = 16,
     ) -> None:
         self.slides = pd.read_parquet(slides_path)
         self.nuclei_path = Path(nuclei_path)
@@ -102,9 +102,9 @@ class NucleiDataset(Dataset[Sample]):
         polygons[..., 1] *= mpp_y
 
         centroids = polygons.mean(axis=1)
-        efd = elliptic_fourier_descriptors(polygons, self.efd_order)
+        efd = elliptic_fourier_descriptors(polygons.astype(np.float64), self.efd_order)
 
-        return centroids, efd
+        return centroids, efd.astype(np.float32)
 
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
@@ -146,6 +146,7 @@ class NucleiDataset(Dataset[Sample]):
             mpp_x=slide.mpp_x,
             mpp_y=slide.mpp_y,
         )
+        efds = efds.reshape(-1, self.efd_order * 4)
 
         return {
             "global_crops": (
