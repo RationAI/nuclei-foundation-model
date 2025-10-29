@@ -19,7 +19,7 @@ dependencies = [
     "deepspeed>=0.17.2",
     "shapely>=2.1.1",
     "degraph",
-    "mlflow>2.0",
+    "mlflow>=3.0",
     "ratiopath>=1.0.1",
 ]
 
