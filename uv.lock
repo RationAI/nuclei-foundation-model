@@ -1381,7 +1381,7 @@ requires-dist = [
     { name = "degraph", directory = "lib/degraph" },
     { name = "einops", specifier = ">=0.8.1" },
     { name = "lightning", specifier = ">=2.4.0" },
-    { name = "mlflow", specifier = ">2.0" },
+    { name = "mlflow", specifier = ">=3.0" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pytorch-triton-rocm", marker = "sys_platform == 'linux'", specifier = ">=3.5.0", index = "https://download.pytorch.org/whl/rocm6.4" },
     { name = "rationai-mlkit", git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/mlkit.git" },
