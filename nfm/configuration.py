@@ -14,6 +14,7 @@ class Config(PretrainedConfig):
         num_cross_layers: int = 24,
         num_self_layers: int = 24,
         rope_theta: float = 10000,
+        efd_order: int = 10,
         **kwargs: Any,
     ) -> None:
         self.dim = dim
@@ -22,4 +23,5 @@ class Config(PretrainedConfig):
         self.num_cross_layers = num_cross_layers
         self.num_self_layers = num_self_layers
         self.rope_theta = rope_theta
+        self.efd_order = efd_order
         super().__init__(**kwargs)
