@@ -38,6 +38,7 @@ extend-ignore = [
     "TC002", # move third-party into a type-checking block
     "F722", # jaxtyping
     "N801", # class name lowercase
+    "N806", # variable with CAPITALIZED name
     "B020" # local variable shadowing built-in
 ]
 
