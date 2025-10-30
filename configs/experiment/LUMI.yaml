@@ -1,0 +1,13 @@
+# @package _global_
+
+data:
+  batch_size: 4
+  num_workers: 0
+  train:
+    _target_: nfm.data.datasets.NucleiDataset
+    slides_path: /flash/project_465002057/nuclei/slides
+    nuclei_path: /flash/project_465002057/nuclei/cells
+
+metadata:
+  run_name: Training
+  description: Training of the model on full data
