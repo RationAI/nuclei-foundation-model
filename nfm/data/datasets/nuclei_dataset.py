@@ -108,7 +108,7 @@ class NucleiDataset(Dataset[Sample]):
 
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
-        df = pd.read_parquet(self.nuclei_path / f"slide_id={slide['slide_id']}")
+        df = pd.read_parquet(self.nuclei_path / f"slide_id={slide.id}")
 
         points = np.stack(df.points.values)
         graph = build_spatial_graph(points)

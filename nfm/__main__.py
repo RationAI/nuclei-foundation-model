@@ -1,6 +1,7 @@
 from random import randint
 
 import hydra
+import torch
 from lightning import seed_everything
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig, OmegaConf
@@ -17,6 +18,7 @@ OmegaConf.register_new_resolver(
 @hydra.main(config_path="../configs", config_name="default", version_base=None)
 @autolog
 def main(config: DictConfig, logger: Logger | None = None) -> None:
+    torch.set_float32_matmul_precision("medium")
     seed_everything(config.seed, workers=True)
 
     data = hydra.utils.instantiate(
