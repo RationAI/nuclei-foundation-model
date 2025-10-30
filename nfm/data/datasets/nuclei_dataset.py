@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
 from degraph import build_spatial_graph
 from numpy.typing import NDArray
 from sklearn.cluster import KMeans
@@ -33,11 +32,9 @@ class NucleiDataset(Dataset[Sample]):
         alpha: float = 0.85,
         efd_order: int = 16,
     ) -> None:
-        self.slides = pq.read_table(
-            slides_path,
-            partitioning="hive",
-            columns=["id", "mpp_x", "mpp_y", "dataset", "organ"],
-        ).to_pandas()
+        self.slides = pd.read_parquet(
+            slides_path, columns=["id", "mpp_x", "mpp_y", "dataset", "organ"]
+        )
         self.nuclei_path = Path(nuclei_path)
         self.global_crop_k = global_crop_k
         self.local_crop_k = local_crop_k

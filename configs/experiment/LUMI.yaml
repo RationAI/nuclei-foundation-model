@@ -5,7 +5,7 @@ data:
   num_workers: 0
   train:
     _target_: nfm.data.datasets.NucleiDataset
-    slides_path: /flash/project_465002057/nuclei/slides
+    slides_path: /flash/project_465002057/nuclei/slides.parquet
     nuclei_path: /flash/project_465002057/nuclei/cells
 
 metadata:
