@@ -118,7 +118,8 @@ class NucleiDataset(Dataset[Sample]):
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
         df = pd.read_parquet(
-            self.nuclei_path / slide.dataset / slide.organ / f"slide_id={slide.id}"
+            self.nuclei_path
+            / f"organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}"
         )
 
         points = np.stack(df.points.values)
