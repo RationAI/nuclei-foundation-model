@@ -60,7 +60,7 @@ class NucleiDataset(Dataset[Sample]):
         idx: int,
         k: int,
         graph: list[list[tuple[int, float]]],
-        centroids: Sequence[float],
+        centroids: NDArray[np.float32],
         indices: set[int] | None = None,
     ) -> list[int]:
         component_indices = []
@@ -108,6 +108,17 @@ class NucleiDataset(Dataset[Sample]):
 
         return centroids, efd.astype(np.float32)
 
+    def pad_crops(
+        self, crops: NDArray[np.float32], target_k: int
+    ) -> NDArray[np.float32]:
+        pad_len = target_k - crops.shape[1]
+        return np.pad(
+            crops,
+            ((0, 0), (0, pad_len), (0, 0)),
+            mode="constant",
+            constant_values=0,
+        )
+
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
         df = pd.read_parquet(
@@ -115,7 +126,10 @@ class NucleiDataset(Dataset[Sample]):
             / f"organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}"
         )
 
-        points = np.stack(df.points.values)
+        points = np.stack(df.points.values, dtype=np.float32)
+        # delaunay triangulation fails with duplicate points - remove them
+        points, unique_idx = np.unique(points, axis=0, return_index=True)
+        df = df.iloc[unique_idx].reset_index(drop=True)
         graph = build_spatial_graph(points)
 
         # Global crops generation
@@ -155,12 +169,12 @@ class NucleiDataset(Dataset[Sample]):
 
         return {
             "global_crops": (
-                centroids[global_crops_indices],
-                efds[global_crops_indices],
+                self.pad_crops(centroids[global_crops_indices], self.global_crop_k),
+                self.pad_crops(efds[global_crops_indices], self.global_crop_k),
             ),
             "local_crops": (
-                centroids[local_crops_indices],
-                efds[local_crops_indices],
+                self.pad_crops(centroids[local_crops_indices], self.local_crop_k),
+                self.pad_crops(efds[local_crops_indices], self.local_crop_k),
             ),
             "global_spatial_registers": np.stack(
                 [
