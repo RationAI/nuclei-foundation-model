@@ -3,7 +3,7 @@ defaults:
   - logger: mlflow
   - _self_
 
-seed: ${random_seed:}
+seed: 0
 mode: ???
 checkpoint: null
 
