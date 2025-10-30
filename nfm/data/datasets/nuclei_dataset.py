@@ -32,7 +32,16 @@ class NucleiDataset(Dataset[Sample]):
         alpha: float = 0.85,
         efd_order: int = 16,
     ) -> None:
-        self.slides = pd.read_parquet(slides_path)
+        self.slides = pd.read_parquet(
+            slides_path, columns=["id", "mpp_x", "mpp_y", "path"]
+        )
+        self.slides["organ"] = self.slides["path"].apply(
+            lambda p: Path(p).parent.parent.name
+        )
+        self.slides["dataset"] = self.slides["path"].apply(
+            lambda p: Path(p).parent.name
+        )
+
         self.nuclei_path = Path(nuclei_path)
         self.global_crop_k = global_crop_k
         self.local_crop_k = local_crop_k
@@ -108,7 +117,9 @@ class NucleiDataset(Dataset[Sample]):
 
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
-        df = pd.read_parquet(self.nuclei_path / f"slide_id={slide.id}")
+        df = pd.read_parquet(
+            self.nuclei_path / slide.dataset / slide.organ / f"slide_id={slide.id}"
+        )
 
         points = np.stack(df.points.values)
         graph = build_spatial_graph(points)
