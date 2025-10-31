@@ -1,7 +1,6 @@
 import heapq
 import itertools
 import random
-from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -128,7 +127,8 @@ class NucleiDataset(Dataset[Sample]):
 
         points = np.stack(df.points.values, dtype=np.float32)
         # delaunay triangulation fails with duplicate points - remove them
-        points, unique_idx = np.unique(points, axis=0, return_index=True)
+        _, unique_idx = np.unique(points.round(decimals=1), axis=0, return_index=True)
+        points = points[unique_idx]
         df = df.iloc[unique_idx].reset_index(drop=True)
         graph = build_spatial_graph(points)
 

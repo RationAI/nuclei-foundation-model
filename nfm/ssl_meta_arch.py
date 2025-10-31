@@ -55,32 +55,29 @@ class SSLMetaArch(LightningModule):
         self.ibot_patch_loss = iBOTPatchLoss()
 
     def setup(self, stage: str) -> None:
-        # self.trainer.num_training_batches is inf for some reason
         if stage == "fit":
             self.teacher_temp = CosineScheduler(
                 base_value=0.07,
                 final_value=0.07,
-                total_iters=30 * 10,  # self.trainer.num_training_batches,
-                warmup_iters=30 * 10,  # self.trainer.num_training_batches,
+                total_iters=self.trainer.estimated_stepping_batches,
+                warmup_iters=100_000,
                 start_warmup_value=0.04,
             )
 
     def student_forward(self, batch: dict[str, Any]) -> dict[str, Tensor]:
-        pattern = "b n ... -> (b n) ..."
-
         pos, embed = batch["local_crops"]
         local_outputs = self.student.backbone(
-            src=rearrange(embed, pattern),
-            tgt_pos=rearrange(batch["local_spatial_registers"], pattern),
-            src_pos=rearrange(pos, pattern),
+            src=embed.flatten(0, 1),
+            tgt_pos=batch["local_spatial_registers"].flatten(0, 1),
+            src_pos=pos.flatten(0, 1),
             local_crops=True,
         )
 
         pos, embed = batch["global_crops"]
         global_outputs = self.student.backbone(
-            src=rearrange(embed, pattern),
-            tgt_pos=rearrange(batch["global_spatial_registers"], pattern),
-            src_pos=rearrange(pos, pattern),
+            src=embed.flatten(0, 1),
+            tgt_pos=batch["global_spatial_registers"].flatten(0, 1),
+            src_pos=pos.flatten(0, 1),
         )
 
         local_cls_logits = self.student.dino_head(local_outputs["cls_token"])
@@ -187,7 +184,7 @@ class SSLMetaArch(LightningModule):
         optimizer = torch.optim.AdamW(params, lr=0.0004, weight_decay=0.04)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=self.trainer.max_epochs * self.trainer.num_training_batches,
+            T_max=self.trainer.estimated_stepping_batches,
             eta_min=1.0e-06,
         )
         return [optimizer], [scheduler]
