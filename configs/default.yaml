@@ -8,7 +8,7 @@ mode: ???
 checkpoint: null
 
 trainer:
-  max_epochs: -1
+  max_epochs: 100
   precision: bf16-mixed
   gradient_clip_val: 0.1
 
