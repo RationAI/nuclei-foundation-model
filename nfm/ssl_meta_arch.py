@@ -81,7 +81,7 @@ class SSLMetaArch(LightningModule):
         # and drop tokens independently with that probability within the crop.
         p_drop = torch.empty(
             embed_flat.shape[0], 1, 1, device=embed_flat.device, dtype=embed_flat.dtype
-        ).uniform_(0.2, 0.5)
+        ).uniform_(0.1, 0.5)
         mask = (
             torch.rand(
                 embed_flat.shape[0],
