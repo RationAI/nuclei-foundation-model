@@ -130,7 +130,13 @@ class Transformer(nn.Module):
                 - "cls_token": The class token of shape (b, d)
                 - "patch_tokens": The patch tokens of shape (b, n, d)
         """
-        src = self.polygon_proj(self.bn(src.permute(0, 2, 1)).permute(0, 2, 1))
+        # Ignore zero tokens as they are padded polygons
+        src_flatten = src.flatten(0, 1)
+        non_zero = src_flatten.abs().sum(dim=-1) != 0
+        if non_zero.any():
+            src_flatten[non_zero] = self.bn(src_flatten[non_zero])
+
+        src = self.polygon_proj(src)
 
         tgt = torch.ones(src.shape[0], tgt_pos.shape[1], src.shape[2]).to(src)
         cls_tokens = repeat(self.cls_token, "d -> b 1 d", b=tgt.shape[0])
