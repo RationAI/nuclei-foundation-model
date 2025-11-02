@@ -12,6 +12,7 @@ from torch.utils.data import Dataset
 
 from nfm.data.efd import elliptic_fourier_descriptors
 
+
 type Sample = dict[
     str, tuple[NDArray[np.float32], NDArray[np.float32]] | NDArray[np.float32]
 ]

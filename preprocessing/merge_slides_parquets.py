@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
+
 df = pq.read_table(
     "/flash/project_465002057/nuclei/slides",
     partitioning="hive",
