@@ -1,8 +1,8 @@
 # @package _global_
 
 data:
-  batch_size: 16
-  num_workers: 8
+  batch_size: 10
+  num_workers: 15
   train:
     _target_: nfm.data.datasets.NucleiDataset
     slides_path: /flash/project_465002057/nuclei/slides.parquet
