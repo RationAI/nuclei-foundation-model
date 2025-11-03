@@ -20,7 +20,7 @@ class KoLeoLoss(nn.Module):
         super().__init__()
         self.eps = eps
 
-    @torch.autocast("cuda", enabled=False)
+    @torch.autocast("cuda", dtype=torch.float32)
     def forward(self, x: Tensor) -> Tensor:
         """Compute the KoLeo loss.
 
