@@ -4,7 +4,6 @@
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=16
-#SBATCH --cpu-bind=none
 #SBATCH --gres=gpu:4            # Request N GPUs per machine
 #SBATCH --mem=0
 #SBATCH -D /project/project_465002057/nuclei-foundational-model
