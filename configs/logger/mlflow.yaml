@@ -1,5 +1,5 @@
 _target_: rationai.mlkit.lightning.loggers.MLFlowLogger
-experiment_name: ${metadata.experiment_name}
+experiment_name: Nuclei Foundational Model
 run_name: ${metadata.run_name}
 log_system_metrics: true
 tags:

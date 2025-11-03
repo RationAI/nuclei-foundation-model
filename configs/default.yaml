@@ -26,7 +26,6 @@ model:
     hidden_dim: 2048
 
 metadata:
-  experiment_name: Nuclei Foundational Model
   run_name: ???
   description: ???
   hyperparams: {}
