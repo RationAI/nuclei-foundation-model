@@ -3,14 +3,13 @@ import torch
 from lightning import seed_everything
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
-from rationai.mlkit import Trainer, autolog
+from rationai.mlkit import Trainer
 
 from nfm.data import DataModule
 from nfm.ssl_meta_arch import SSLMetaArch
 
 
 @hydra.main(config_path="../configs", config_name="default", version_base=None)
-@autolog
 def main(config: DictConfig, logger: Logger | None = None) -> None:
     torch.set_float32_matmul_precision("medium")
     seed_everything(config.seed, workers=True)
