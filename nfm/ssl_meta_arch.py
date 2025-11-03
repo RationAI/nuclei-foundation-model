@@ -60,7 +60,7 @@ class SSLMetaArch(LightningModule):
                 base_value=0.07,
                 final_value=0.07,
                 total_iters=self.trainer.estimated_stepping_batches,
-                warmup_iters=100_000,
+                warmup_iters=1000,
                 start_warmup_value=0.04,
             )
 
