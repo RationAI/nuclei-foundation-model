@@ -1,7 +1,6 @@
 import hydra
 import torch
 from lightning import seed_everything
-from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 from rationai.mlkit import Trainer
 
@@ -10,7 +9,7 @@ from nfm.ssl_meta_arch import SSLMetaArch
 
 
 @hydra.main(config_path="../configs", config_name="default", version_base=None)
-def main(config: DictConfig, logger: Logger | None = None) -> None:
+def main(config: DictConfig) -> None:
     torch.set_float32_matmul_precision("medium")
     seed_everything(config.seed, workers=True)
 
@@ -21,7 +20,7 @@ def main(config: DictConfig, logger: Logger | None = None) -> None:
     )
     model = hydra.utils.instantiate(config.model, _target_=SSLMetaArch)
 
-    trainer = hydra.utils.instantiate(config.trainer, _target_=Trainer, logger=logger)
+    trainer = hydra.utils.instantiate(config.trainer, _target_=Trainer)
     getattr(trainer, config.mode)(model, datamodule=data, ckpt_path=config.checkpoint)
 
 
