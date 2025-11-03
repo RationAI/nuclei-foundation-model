@@ -20,7 +20,8 @@ def main(config: DictConfig) -> None:
     )
     model = hydra.utils.instantiate(config.model, _target_=SSLMetaArch)
 
-    trainer = hydra.utils.instantiate(config.trainer, _target_=Trainer)
+    logger = hydra.utils.instantiate(config.logger)
+    trainer = hydra.utils.instantiate(config.trainer, _target_=Trainer, logger=logger)
     getattr(trainer, config.mode)(model, datamodule=data, ckpt_path=config.checkpoint)
 
 
