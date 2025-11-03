@@ -184,7 +184,13 @@ class SSLMetaArch(LightningModule):
         self.log("train/dino_loss", dino_global_loss, rank_zero_only=True)
         self.log("train/ibot_loss", ibot_loss, rank_zero_only=True)
         self.log("train/koleo_loss", koleo_loss, rank_zero_only=True)
-        self.log("train/total_loss", total_loss, rank_zero_only=True, prog_bar=True)
+        self.log(
+            "train/total_loss",
+            total_loss,
+            rank_zero_only=True,
+            prog_bar=True,
+            sync_dist=True,
+        )
 
         return total_loss
 

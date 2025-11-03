@@ -11,6 +11,13 @@ trainer:
   max_epochs: 100
   precision: 32-true
   gradient_clip_val: 0.1
+  callbacks:
+    model_checkpoint:
+      _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      save_top_k: 3
+      save_last: true
+      monitor: train/total_loss
+      mode: min
 
 model:
   ema_momentum: 0.999
