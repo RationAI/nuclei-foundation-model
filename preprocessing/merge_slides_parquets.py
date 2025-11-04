@@ -10,7 +10,7 @@ ORGAN_REGEX = re.compile(r"organ=([^/]+)")
 SLIDE_ID_REGEX = re.compile(r"slide_id=([^/]+)")
 
 
-def get_file_info_with_partitions(file_path):
+def get_file_info_with_partitions(file_path: str):
     parquet_file = pq.ParquetFile(file_path)
     dataset_match = DATASET_REGEX.search(file_path)
     organ_match = ORGAN_REGEX.search(file_path)
@@ -40,7 +40,8 @@ max_workers = 32  # Adjust based on your system's (network) I/O capacity
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
     future_to_file = {
-        executor.submit(get_file_info_with_partitions, file): file for file in all_files
+        executor.submit(get_file_info_with_partitions, str(file)): file
+        for file in all_files
     }
 
     # Process results as they complete
