@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-
 df = pq.read_table(
     "/flash/project_465002057/nuclei/slides",
     partitioning="hive",
@@ -10,12 +9,13 @@ df = pq.read_table(
 
 
 def has_cells_dir(row):
-    return Path(
+    path = Path(
         "/flash/project_465002057/nuclei/cells",
         f"organ={row.organ}",
         f"dataset={row.dataset}",
         f"slide_id={row.id}",
-    ).is_dir()
+    )
+    return path.is_dir() and pq.read_table(path).num_rows > 5000
 
 
 df = df[df.apply(has_cells_dir, axis=1)]
