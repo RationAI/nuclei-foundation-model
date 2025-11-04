@@ -20,7 +20,7 @@ def get_file_info_with_partitions(file_path):
         "num_rows": parquet_file.metadata.num_rows,
         "dataset": dataset_match.group(1),
         "organ": organ_match.group(1),
-        "slide_id": slide_id_match.group(1),
+        "id": slide_id_match.group(1),
     }
 
 
