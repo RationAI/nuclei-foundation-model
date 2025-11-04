@@ -30,7 +30,9 @@ slides_df = pq.read_table(
     partitioning="hive",
 ).to_pandas()
 
-all_files = list(Path("/flash/project_465002057/nuclei/cells").rglob("slide_id=*"))
+all_files = list(
+    Path("/flash/project_465002057/nuclei/cells").rglob("*/slide_id=*/*.parquet")
+)
 print(f"Found {len(all_files)} parquet files to process.")
 
 results_list = []
