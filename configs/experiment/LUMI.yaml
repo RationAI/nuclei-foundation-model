@@ -2,7 +2,7 @@
 
 data:
   batch_size: 10
-  num_workers: 15
+  num_workers: 7
   train:
     _target_: nfm.data.datasets.NucleiDataset
     slides_path: /flash/project_465002057/nuclei/slides.parquet
