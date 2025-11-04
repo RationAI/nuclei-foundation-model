@@ -18,6 +18,8 @@ trainer:
       save_last: true
       monitor: train/total_loss
       mode: min
+    monitor:
+      _target_: lightning.pytorch.callbacks.DeviceStatsMonitor
 
 model:
   ema_momentum: 0.999
