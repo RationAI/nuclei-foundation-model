@@ -18,6 +18,8 @@ dependencies = [
     "degraph",
     "mlflow>=3.0",
     "ratiopath>=1.0.1",
+    "pandas>=2.3.3",
+    "s3fs>=2025.10.0",
 ]
 
 
