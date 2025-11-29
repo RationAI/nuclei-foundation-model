@@ -13,7 +13,6 @@ from ratiopath.tiling.utils import row_hash
 from ray.data._internal.datasource.parquet_datasink import ParquetDatasink
 from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
-
 INPUT_SLIDES = ""
 OUTPUT_SLIDES = "slides"
 OUTPUT_NUCLEI = "nuclei"

@@ -5,8 +5,8 @@ data:
   num_workers: 7
   train:
     _target_: nfm.data.datasets.NucleiDataset
-    slides_path: /flash/project_465002057/nuclei/slides.parquet
-    nuclei_path: /flash/project_465002057/nuclei/cells
+    slides_path: s3://nuclei/slides_cropped.parquet
+    nuclei_path: s3://nuclei
 
 metadata:
   run_name: Training
