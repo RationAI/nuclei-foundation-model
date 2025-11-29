@@ -1,3 +1,4 @@
+import time
 from collections.abc import Callable
 from functools import partial
 from typing import Any
@@ -54,6 +55,8 @@ class SSLMetaArch(LightningModule):
         self.koleo_loss = KoLeoLoss()
         self.ibot_patch_loss = iBOTPatchLoss()
 
+        self.batch_end_time = None
+
     def setup(self, stage: str) -> None:
         if stage == "fit":
             self.teacher_temp = CosineScheduler(
@@ -63,6 +66,18 @@ class SSLMetaArch(LightningModule):
                 warmup_iters=1000,
                 start_warmup_value=0.04,
             )
+
+    def on_train_batch_start(self, *_, **__) -> None:
+        if self.batch_end_time is not None:
+            self.log(
+                "train/idle_time",
+                time.time() - self.batch_end_time,
+                prog_bar=True,
+                rank_zero_only=True,
+            )
+
+    def on_train_batch_end(self, *_, **__) -> None:
+        self.batch_end_time = time.time()
 
     def student_forward(self, batch: dict[str, Any]) -> dict[str, Tensor]:
         pos, embed = batch["local_crops"]
