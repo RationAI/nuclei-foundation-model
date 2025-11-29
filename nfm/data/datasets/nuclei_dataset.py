@@ -1,7 +1,6 @@
 import heapq
 import itertools
 import random
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -12,7 +11,6 @@ from torch.utils.data import Dataset
 
 from nfm.data.efd import elliptic_fourier_descriptors
 
-
 type Sample = dict[
     str, tuple[NDArray[np.float32], NDArray[np.float32]] | NDArray[np.float32]
 ]
@@ -21,8 +19,8 @@ type Sample = dict[
 class NucleiDataset(Dataset[Sample]):
     def __init__(
         self,
-        slides_path: str | Path,
-        nuclei_path: str | Path,
+        slides_path: str,
+        nuclei_path: str,
         global_crop_k: int = 4096,
         local_crop_k: int = 768,
         n_global_crops: int = 2,
@@ -35,7 +33,7 @@ class NucleiDataset(Dataset[Sample]):
         self.slides = pd.read_parquet(
             slides_path, columns=["id", "mpp_x", "mpp_y", "dataset", "organ"]
         )
-        self.nuclei_path = Path(nuclei_path)
+        self.nuclei_path = nuclei_path
         self.global_crop_k = global_crop_k
         self.local_crop_k = local_crop_k
         self.n_global_crops = n_global_crops
@@ -122,8 +120,7 @@ class NucleiDataset(Dataset[Sample]):
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
         df = pd.read_parquet(
-            self.nuclei_path
-            / f"organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}"
+            f"{self.nuclei_path}organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}"
         )
 
         points = np.stack(df.points.values, dtype=np.float32)
