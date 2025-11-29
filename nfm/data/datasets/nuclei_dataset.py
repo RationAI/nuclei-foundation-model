@@ -120,7 +120,7 @@ class NucleiDataset(Dataset[Sample]):
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
         df = pd.read_parquet(
-            f"{self.nuclei_path}organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}"
+            f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}"
         )
 
         points = np.stack(df.points.values, dtype=np.float32)
