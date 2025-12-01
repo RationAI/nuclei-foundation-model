@@ -120,14 +120,24 @@ class NucleiDataset(Dataset[Sample]):
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
         df = pd.read_parquet(
-            f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}"
+            f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}/nuclei.parquet"
         )
 
         points = np.stack(df.points.values, dtype=np.float32)
-        # delaunay triangulation fails with duplicate points - remove them
-        _, unique_idx = np.unique(points.round(decimals=1), axis=0, return_index=True)
-        points = points[unique_idx]
-        df = df.iloc[unique_idx].reset_index(drop=True)
+
+        # Downsample if too many points
+        limit = int(self.n_global_crops * self.global_crop_k / (1 - self.alpha))
+        if len(points) > limit:
+            center_idx = random.randint(0, len(points) - 1)
+            dists = np.linalg.norm(points - points[center_idx], axis=1)
+            keep_indices = np.argpartition(dists, limit)[:limit]
+
+            points = points[keep_indices]
+            df = df.iloc[keep_indices].reset_index(drop=True)
+            seed = int(np.where(keep_indices == center_idx)[0][0])
+        else:
+            seed = random.randint(0, len(points) - 1)
+
         graph = build_spatial_graph(points)
 
         # Global crops generation
