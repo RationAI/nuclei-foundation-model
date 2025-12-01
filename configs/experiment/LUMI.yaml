@@ -2,7 +2,7 @@
 
 data:
   batch_size: 10
-  num_workers: 7
+  num_workers: 6
   train:
     _target_: nfm.data.datasets.NucleiDataset
     slides_path: s3://nuclei/slides_cropped.parquet

@@ -1,4 +1,3 @@
-import time
 from collections.abc import Callable
 from functools import partial
 from typing import Any
@@ -55,8 +54,6 @@ class SSLMetaArch(LightningModule):
         self.koleo_loss = KoLeoLoss()
         self.ibot_patch_loss = iBOTPatchLoss()
 
-        self.batch_end_time = None
-
     def setup(self, stage: str) -> None:
         if stage == "fit":
             self.teacher_temp = CosineScheduler(
@@ -66,18 +63,6 @@ class SSLMetaArch(LightningModule):
                 warmup_iters=1000,
                 start_warmup_value=0.04,
             )
-
-    def on_train_batch_start(self, *_, **__) -> None:
-        if self.batch_end_time is not None:
-            self.log(
-                "train/idle_time",
-                time.time() - self.batch_end_time,
-                prog_bar=True,
-                rank_zero_only=True,
-            )
-
-    def on_train_batch_end(self, *_, **__) -> None:
-        self.batch_end_time = time.time()
 
     def student_forward(self, batch: dict[str, Any]) -> dict[str, Tensor]:
         pos, embed = batch["local_crops"]
@@ -162,10 +147,6 @@ class SSLMetaArch(LightningModule):
         }
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        t_start = time.time()
-
         n_global_crops = batch["global_spatial_registers"].shape[1]
         n_local_crops = batch["local_spatial_registers"].shape[1]
 
@@ -174,21 +155,9 @@ class SSLMetaArch(LightningModule):
         dino_global_scale = dino_global_terms / (dino_global_terms + dino_local_terms)
         dino_local_scale = dino_local_terms / (dino_global_terms + dino_local_terms)
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        t0 = time.time()
         outputs = self.student_forward(batch)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        self.log("train/time_student", time.time() - t0, rank_zero_only=True)
-
-        t0 = time.time()
         targets = self.teacher_forward(batch)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        self.log("train/time_teacher", time.time() - t0, rank_zero_only=True)
 
-        t0 = time.time()
         ibot_loss = self.ibot_patch_loss(
             outputs["global_patch_logits"],
             targets["global_patch_logits"],
@@ -210,17 +179,12 @@ class SSLMetaArch(LightningModule):
             + dino_global_loss * dino_global_scale * self.dino_loss_weight
             + koleo_loss * self.koleo_loss_weight
         )
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        self.log("train/time_loss", time.time() - t0, rank_zero_only=True)
 
         self.log("train/dino_loss", dino_local_loss, rank_zero_only=True)
         self.log("train/dino_loss", dino_global_loss, rank_zero_only=True)
         self.log("train/ibot_loss", ibot_loss, rank_zero_only=True)
         self.log("train/koleo_loss", koleo_loss, rank_zero_only=True)
         self.log("train/total_loss", total_loss, rank_zero_only=True, prog_bar=True)
-
-        self.log("train/time_step_forward", time.time() - t_start, rank_zero_only=True)
 
         return total_loss
 
@@ -251,9 +215,6 @@ class SSLMetaArch(LightningModule):
         optimizer: Optimizer | LightningOptimizer,
         optimizer_closure: Callable[[], Any] | None = None,
     ) -> None:
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        t_start = time.time()
         super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
 
         # update teacher with EMA
@@ -264,7 +225,3 @@ class SSLMetaArch(LightningModule):
             torch._foreach_add_(
                 teacher_params, student_params, alpha=1 - self.ema_momentum
             )
-
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        self.log("train/time_optimizer", time.time() - t_start, rank_zero_only=True)
