@@ -10,15 +10,6 @@
 #SBATCH --account=project_465002057
 #SBATCH --partition=standard-g
 
-cat << EOF > select_gpu
-#!/bin/bash
-
-export ROCR_VISIBLE_DEVICES=\$SLURM_LOCALID
-exec \$*
-EOF
-
-chmod +x ./select_gpu
-
 CPU_BIND="mask_cpu:7e000000000000,7e00000000000000"
 CPU_BIND="${CPU_BIND},7e0000,7e000000"
 CPU_BIND="${CPU_BIND},7e,7e00"
@@ -27,9 +18,13 @@ CPU_BIND="${CPU_BIND},7e00000000,7e0000000000"
 export MLFLOW_TRACKING_URI="file:///scratch/project_465002057/mlruns"
 export MPICH_GPU_SUPPORT_ENABLED=1
 
-srun --cpu-bind=${CPU_BIND} ./select_gpu singularity exec \
-    -B "/flash/project_465002057,/scratch/project_465002057,/projappl/project_465002057" \
-    "/project/project_465002057/nfm_0.4.0-rocm.sif" \
-    python3 -m nfm mode=fit +experiment=LUMI +trainer.num_nodes=$SLURM_NNODES +trainer.devices=$SLURM_GPUS_ON_NODE +trainer.strategy=deepspeed_stage_2 data.num_workers=6
+# LUMI-O S3 Credentials
+# Generate these at https://auth.lumidata.eu/
+export AWS_ACCESS_KEY_ID="<YOUR_ACCESS_KEY_ID>"
+export AWS_SECRET_ACCESS_KEY="<YOUR_SECRET_ACCESS_KEY>"
+export AWS_ENDPOINT_URL="https://lumidata.eu"
 
-rm -rf ./select_gpu
+srun --cpu-bind=${CPU_BIND} singularity exec \
+    -B "/scratch/project_465002057,/projappl/project_465002057" \
+    "/project/project_465002057/nfm_0.5.0-rocm.sif" \
+    python3 -m nfm mode=fit +experiment=LUMI +trainer.num_nodes=$SLURM_NNODES +trainer.devices=$SLURM_GPUS_ON_NODE +trainer.strategy=deepspeed_stage_2
