@@ -33,7 +33,6 @@ class DataModule(LightningDataModule):
             persistent_workers=True,
             pin_memory=True,
             in_order=False,
-            prefetch_factor=4,
         )
 
     def test_dataloader(self) -> Iterable[dict[str, Tensor]]:

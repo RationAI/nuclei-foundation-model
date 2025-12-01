@@ -4,6 +4,7 @@ import random
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 from degraph import build_spatial_graph
 from numpy.typing import NDArray
 from sklearn.cluster import KMeans
@@ -117,13 +118,47 @@ class NucleiDataset(Dataset[Sample]):
             constant_values=0,
         )
 
-    def __getitem__(self, idx: int) -> Sample:
-        slide = self.slides.iloc[idx]
-        df = pd.read_parquet(
-            f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}/nuclei.parquet"
+    def read_radial_distances(
+        self, pf: pq.ParquetFile, indices: list[int]
+    ) -> NDArray[np.float32]:
+        rg_lengths = [
+            pf.metadata.row_group(i).num_rows for i in range(pf.num_row_groups)
+        ]
+        rg_starts = np.concatenate(([0], np.cumsum(rg_lengths)))
+        rg_matches = np.searchsorted(rg_starts, indices, side="right") - 1
+        unique_rgs = np.unique(rg_matches)
+
+        # Read only the necessary row groups
+        radial_table = pf.read_row_groups(unique_rgs, columns=["radial_distances"])
+
+        # Map sorted_file_indices to indices in the new concatenated table
+        # We need to adjust indices based on the row groups we actually read
+        read_rg_lengths = [rg_lengths[i] for i in unique_rgs]
+        new_rg_starts = np.concatenate(([0], np.cumsum(read_rg_lengths)[:-1]))
+
+        # Create lookup: RG_index -> start_in_new_table
+        rg_lookup = np.zeros(pf.num_row_groups, dtype=np.int64)
+        rg_lookup[unique_rgs] = new_rg_starts
+
+        # Calculate indices in the new table
+        indices_in_new = indices - rg_starts[rg_matches] + rg_lookup[rg_matches]
+
+        # Extract values and restore original order
+        return (
+            radial_table["radial_distances"]
+            .take(indices_in_new)
+            .combine_chunks()
+            .values.to_numpy()
+            .reshape(-1, 64)
         )
 
-        points = np.stack(df.points.values, dtype=np.float32)
+    def __getitem__(self, idx: int) -> Sample:
+        slide = self.slides.iloc[idx]
+        pf = pq.ParquetFile(
+            f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}/nuclei.parquet"
+        )
+        points_col = pf.read(columns=["points"])["points"].combine_chunks()
+        points = points_col.values.to_numpy().reshape(-1, 2).astype(np.float32)
 
         # Downsample if too many points
         limit = int(self.n_global_crops * self.global_crop_k / (1 - self.alpha))
@@ -133,9 +168,9 @@ class NucleiDataset(Dataset[Sample]):
             keep_indices = np.argpartition(dists, limit)[:limit]
 
             points = points[keep_indices]
-            df = df.iloc[keep_indices].reset_index(drop=True)
             seed = int(np.where(keep_indices == center_idx)[0][0])
         else:
+            keep_indices = np.arange(len(points))
             seed = random.randint(0, len(points) - 1)
 
         graph = build_spatial_graph(points)
@@ -169,7 +204,7 @@ class NucleiDataset(Dataset[Sample]):
 
         centroids, efds = self.radial_to_efd(
             points[all_indices],
-            np.stack(df.radial_distances.values[all_indices]),
+            self.read_radial_distances(pf, keep_indices[all_indices]),
             mpp_x=slide.mpp_x,
             mpp_y=slide.mpp_y,
         )
