@@ -150,6 +150,7 @@ class NucleiGraphEncoder(nn.Module):
             ],
             norm_layer=nn.BatchNorm1d,
         )
+        self.final_norm = nn.BatchNorm1d(config.proj_dim, affine=False)
 
     def forward(
         self, src: Tensor, tgt_pos: Tensor, src_pos: Tensor
@@ -163,4 +164,4 @@ class NucleiGraphEncoder(nn.Module):
         """
         embed = self.backbone(src, tgt_pos, src_pos)
         # 2. Global Average Pooling
-        return embed, self.proj(embed.mean(dim=1))
+        return embed, self.final_norm(self.proj(embed.mean(dim=1)))
