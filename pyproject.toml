@@ -20,6 +20,8 @@ dependencies = [
     "ratiopath>=1.0.1",
     "pandas>=2.3.3",
     "s3fs>=2025.10.0",
+    "lejepa",
+    "torchvision>=0.24.1",
 ]
 
 
@@ -31,6 +33,7 @@ pytorch-triton-rocm = [
 ]
 rationai-mlkit = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/mlkit.git" }
 degraph = { path = "lib/degraph" }
+lejepa = { git = "https://github.com/rbalestr-lab/lejepa.git" }
 
 [[tool.uv.index]]
 name = "pytorch-rocm"
