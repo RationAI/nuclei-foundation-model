@@ -53,6 +53,9 @@ class SSLMetaArch(LightningModule):
         sigreg_loss = self.loss_fn(a_emb)
         lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
 
+        avg_norm = torch.linalg.norm(a_emb, dim=-1).mean()
+        self.log("train/avg_norm", avg_norm, rank_zero_only=True)
+
         self.log("train/sigreg_loss", sigreg_loss, rank_zero_only=True)
         self.log("train/inv_loss", inv_loss, rank_zero_only=True)
         self.log("train/lejepa_loss", lejepa_loss, rank_zero_only=True, prog_bar=True)
