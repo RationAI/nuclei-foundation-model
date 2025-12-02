@@ -1,7 +1,8 @@
 import torch
 import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import rearrange
 from torch import Tensor, nn
+from torchvision.ops import MLP
 
 from nfm.configuration import Config
 from nfm.modeling.layers import FeedForward, RoPE
@@ -106,29 +107,15 @@ class Transformer(nn.Module):
         self.self_layers = nn.ModuleList(
             Layer(config) for _ in range(config.num_self_layers)
         )
-        self.cls_token = nn.Parameter(torch.randn(config.dim))
-        self.cls_norm = nn.RMSNorm(config.dim)
         self.norm = nn.RMSNorm(config.dim)
 
-    def forward(
-        self,
-        src: Tensor,
-        tgt_pos: Tensor,
-        src_pos: Tensor,
-        local_crops: bool = False,
-    ) -> dict[str, Tensor]:
+    def forward(self, src: Tensor, tgt_pos: Tensor, src_pos: Tensor) -> Tensor:
         """Forward pass of the Transformer model.
 
         Args:
             src: Source sequence of shape (b, m, d)
             tgt_pos: Target positions of shape (b, n, 2)
             src_pos: Source positions of shape (b, m, 2)
-            local_crops: Whether local crops are used (affects normalization of cls token)
-
-        Returns:
-            A dictionary containing:
-                - "cls_token": The class token of shape (b, d)
-                - "patch_tokens": The patch tokens of shape (b, n, d)
         """
         # Ignore zero tokens as they are padded polygons
         src_flatten = src.flatten(0, 1)
@@ -139,10 +126,6 @@ class Transformer(nn.Module):
         src = self.polygon_proj(src)
 
         tgt = torch.ones(src.shape[0], tgt_pos.shape[1], src.shape[2]).to(src)
-        cls_tokens = repeat(self.cls_token, "d -> b 1 d", b=tgt.shape[0])
-        tgt = torch.cat((cls_tokens, tgt), dim=1)
-
-        tgt_pos = torch.cat((torch.zeros_like(tgt_pos[:, :1]), tgt_pos), dim=1)
 
         for layer in self.cross_layers:
             tgt = layer(tgt, src, tgt_pos, src_pos)
@@ -150,11 +133,33 @@ class Transformer(nn.Module):
         for layer in self.self_layers:
             tgt = layer(tgt, tgt_pos)
 
-        # Final normalization
-        patch_tokens = self.norm(tgt[:, 1:])
-        if self.training and local_crops:
-            cls_token = self.cls_norm(tgt[:, 0])
-        else:
-            cls_token = self.norm(tgt[:, 0])
+        return self.norm(tgt)
 
-        return {"cls_token": cls_token, "patch_tokens": patch_tokens}
+
+class NucleiGraphEncoder(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.backbone = Transformer(config)
+
+        self.proj = MLP(
+            config.dim,
+            hidden_channels=[
+                config.proj_hidden_dim,
+                config.proj_hidden_dim,
+                config.proj_dim,
+            ],
+        )
+
+    def forward(
+        self, src: Tensor, tgt_pos: Tensor, src_pos: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        """Forward pass of the Transformer model.
+
+        Args:
+            src: Source sequence of shape (b, m, d)
+            tgt_pos: Target positions of shape (b, n, 2)
+            src_pos: Source positions of shape (b, m, 2)
+        """
+        embed = self.backbone(src, tgt_pos, src_pos)
+        # 2. Global Average Pooling
+        return embed, self.proj(embed.mean(dim=1))

@@ -15,6 +15,8 @@ class Config(PretrainedConfig):
         num_self_layers: int = 24,
         rope_theta: float = 10000,
         efd_order: int = 16,
+        proj_dim: int = 256,
+        proj_hidden_dim: int = 2048,
         **kwargs: Any,
     ) -> None:
         self.dim = dim
@@ -24,4 +26,6 @@ class Config(PretrainedConfig):
         self.num_self_layers = num_self_layers
         self.rope_theta = rope_theta
         self.efd_order = efd_order
+        self.proj_dim = proj_dim
+        self.proj_hidden_dim = proj_hidden_dim
         super().__init__(**kwargs)

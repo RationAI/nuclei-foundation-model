@@ -16,24 +16,15 @@ trainer:
       _target_: lightning.pytorch.callbacks.ModelCheckpoint
       save_top_k: 3
       save_last: true
-      monitor: train/total_loss
+      monitor: train/lejepa_loss
       mode: min
     monitor:
       _target_: lightning.pytorch.callbacks.DeviceStatsMonitor
       cpu_stats: true
 
 model:
-  ema_momentum: 0.999
-  dino:
-    num_prototypes: 65536
-    bottleneck_dim: 256
-    num_layers: 3
-    hidden_dim: 2048
-  ibot:
-    num_prototypes: 65536
-    bottleneck_dim: 256
-    num_layers: 3
-    hidden_dim: 2048
+  warmup_steps: 1000
+  lamb: 0.02
 
 metadata:
   run_name: ???
