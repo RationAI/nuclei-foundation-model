@@ -148,6 +148,7 @@ class NucleiGraphEncoder(nn.Module):
                 config.proj_hidden_dim,
                 config.proj_dim,
             ],
+            norm_layer=nn.BatchNorm1d,
         )
 
     def forward(
