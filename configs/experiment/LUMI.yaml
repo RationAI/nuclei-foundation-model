@@ -1,12 +1,12 @@
 # @package _global_
 
 data:
-  batch_size: 10
+  batch_size: 16
   num_workers: 6
   train:
     _target_: nfm.data.datasets.NucleiDataset
-    slides_path: s3://nuclei/slides_cropped.parquet
-    nuclei_path: s3://nuclei
+    slides_path: /flash/project_465002057/nuclei/train_cropped_dedup.parquet
+    nuclei_path: /flash/project_465002057/nuclei/cells
 
 metadata:
   run_name: Training
