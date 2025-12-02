@@ -29,17 +29,17 @@ class SSLMetaArch(LightningModule):
     def forward(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
         pos, embed = batch["local_crops"]
         _, local_proj = self.model(
-            nuclei_efd=embed.flatten(0, 1),
-            nuclei_pos=pos.flatten(0, 1),
-            spatial_registers_pos=batch["local_spatial_registers"].flatten(0, 1),
+            src=embed.flatten(0, 1),
+            src_pos=pos.flatten(0, 1),
+            tgt_pos=batch["local_spatial_registers"].flatten(0, 1),
         )
         local_proj = rearrange(local_proj, "(b n) d -> b n d", b=len(pos))
 
         pos, embed = batch["global_crops"]
         _, global_proj = self.model(
-            nuclei_efd=embed.flatten(0, 1),
-            nuclei_pos=pos.flatten(0, 1),
-            spatial_registers_pos=batch["global_spatial_registers"].flatten(0, 1),
+            src=embed.flatten(0, 1),
+            src_pos=pos.flatten(0, 1),
+            tgt_pos=batch["global_spatial_registers"].flatten(0, 1),
         )
         global_proj = rearrange(global_proj, "(b n) d -> b n d", b=len(pos))
 
