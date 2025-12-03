@@ -58,7 +58,13 @@ class SSLMetaArch(LightningModule):
 
         self.log("train/sigreg_loss", sigreg_loss, rank_zero_only=True)
         self.log("train/inv_loss", inv_loss, rank_zero_only=True)
-        self.log("train/lejepa_loss", lejepa_loss, rank_zero_only=True, prog_bar=True)
+        self.log(
+            "train/lejepa_loss",
+            lejepa_loss,
+            rank_zero_only=True,
+            prog_bar=True,
+            on_epoch=True,
+        )
 
         return lejepa_loss
 
