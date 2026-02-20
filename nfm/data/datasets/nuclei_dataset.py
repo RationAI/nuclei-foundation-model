@@ -7,7 +7,6 @@ import pandas as pd
 import pyarrow.parquet as pq
 from degraph import build_spatial_graph
 from numpy.typing import NDArray
-from sklearn.cluster import KMeans
 from torch.utils.data import Dataset
 
 from nfm.data.efd import elliptic_fourier_descriptors
@@ -46,13 +45,6 @@ class NucleiDataset(Dataset[Sample]):
 
     def __len__(self) -> int:
         return len(self.slides)
-
-    def sample_spatial_registers(
-        self, points: np.ndarray, n_samples: int
-    ) -> NDArray[np.float32]:
-        kmeans = KMeans(n_clusters=n_samples)
-        kmeans.fit(points)
-        return kmeans.cluster_centers_
 
     def find_component(
         self,
@@ -218,17 +210,5 @@ class NucleiDataset(Dataset[Sample]):
             "local_crops": (
                 self.pad_crops(centroids[local_crops_indices], self.local_crop_k),
                 self.pad_crops(efds[local_crops_indices], self.local_crop_k),
-            ),
-            "global_spatial_registers": np.stack(
-                [
-                    self.sample_spatial_registers(c, self.n_global_spatial_registers)
-                    for c in centroids[global_crops_indices]
-                ]
-            ),
-            "local_spatial_registers": np.stack(
-                [
-                    self.sample_spatial_registers(c, self.n_local_spatial_registers)
-                    for c in centroids[local_crops_indices]
-                ]
             ),
         }
