@@ -16,7 +16,7 @@ dependencies = [
     "transformers>=4.53.0",
     "deepspeed>=0.17.2",
     "degraph",
-    "mlflow>=3.0",
+    "mlflow<=3.0",
     "ratiopath>=1.0.1",
     "pandas>=2.3.3",
     "s3fs>=2025.10.0",
