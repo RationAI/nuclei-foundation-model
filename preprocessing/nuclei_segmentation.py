@@ -203,7 +203,6 @@ def main(config: DictConfig, _: MLFlowLogger) -> None:
         num_cpus=0,
         batch_size=config.batch_size,
         memory=3 * 1024**3,
-        concurrency=1,
         zero_copy_batch=True,
     )
     nuclei = nuclei.flat_map(
