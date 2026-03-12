@@ -171,9 +171,9 @@ def filter_tissue_tiles(row: dict[str, Any]) -> bool:
 def main(config: DictConfig, _: MLFlowLogger) -> None:
     slides = read_slides(
         config.slides_path,
-        mpp=config.mpp,
         tile_extent=config.tile_extent,
         stride=config.tile_extent - config.overlap,
+        level=0,
     )
 
     tiles = slides.flat_map(tiling, num_cpus=0.1, memory=128 * 1024**2).repartition(
@@ -202,7 +202,7 @@ def main(config: DictConfig, _: MLFlowLogger) -> None:
         num_gpus=1,
         num_cpus=0,
         batch_size=config.batch_size,
-        memory=3 * 1024**3,
+        memory=5 * 1024**3,
         zero_copy_batch=True,
     )
     nuclei = nuclei.flat_map(
