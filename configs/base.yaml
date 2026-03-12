@@ -6,7 +6,6 @@ defaults:
 project_path: /mnt/projects/nuclei_foundation_model
 
 metadata:
-  experiment_name: Nuclei Foundation Model
   run_name: ???
   description: ""
   hyperparams: {}
