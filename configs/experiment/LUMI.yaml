@@ -1,7 +1,7 @@
 # @package _global_
 
 data:
-  batch_size: 16
+  batch_size: 32
   num_workers: 6
   train:
     _target_: nfm.data.datasets.NucleiDataset

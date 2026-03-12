@@ -1,105 +1,64 @@
-import os
+import hashlib
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
+import hydra
 import numpy as np
-import pyarrow
 import ray
 import torch
+from numpy.typing import NDArray
+from omegaconf import DictConfig
+from rationai.mlkit import autolog, with_cli_args
+from rationai.mlkit.lightning.loggers import MLFlowLogger
 from ratiopath.ray import read_slides
 from ratiopath.tiling import grid_tiles, read_slide_tiles
-from ratiopath.tiling.utils import row_hash
-from ray.data._internal.datasource.parquet_datasink import ParquetDatasink
+from ray.data.expressions import col
 from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
-INPUT_SLIDES = ""
-OUTPUT_SLIDES = "slides"
-OUTPUT_NUCLEI = "nuclei"
-TILE_EXTENT = 2048
-OVERLAP = 64
-STRIDE = TILE_EXTENT - OVERLAP
+
+class SlideRecord(TypedDict):
+    path: str
+    extent_x: int
+    extent_y: int
+    tile_extent_x: int
+    tile_extent_y: int
+    stride_x: int
+    stride_y: int
+    mpp_x: float
+    mpp_y: float
+    level: int
+    downsample: float
+    slide_id: str
+    scale_factor: float
 
 
-def get_log_file(organ: str, dataset: str, slide_id: str) -> Path:
-    log_file = (
-        Path(OUTPUT_SLIDES)
-        / f"organ={organ}"
-        / f"dataset={dataset}"
-        / f"{slide_id}.log"
-    )
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    return log_file
+class TileRecord(TypedDict):
+    tile_x: int
+    tile_y: int
+    path: str
+    slide_id: str
+    mpp_x: float
+    mpp_y: float
+    extent_x: int
+    extent_y: int
+    tile_extent_x: int
+    tile_extent_y: int
+    level: int
 
 
-class ParquetDatasinkWithLogs(ParquetDatasink):
-    def _write_parquet_files(
-        self,
-        tables: list["pyarrow.Table"],
-        filename: str,
-        output_schema: "pyarrow.Schema",
-        write_uuid: str,
-        write_kwargs: dict[str, Any],
-    ) -> None:
-        for col in ["tile_x", "tile_y"]:
-            idx = output_schema.get_field_index(col)
-            if idx != -1:
-                output_schema = output_schema.remove(idx)
-
-        super()._write_parquet_files(
-            [t.drop_columns(["tile_x", "tile_y"]) for t in tables],
-            filename,
-            output_schema,
-            write_uuid,
-            write_kwargs,
-        )
-
-        for table in tables:
-            df = table.to_pandas()
-            for slide_id, group in df.groupby("slide_id"):
-                log_entries = group[["tile_x", "tile_y"]].drop_duplicates(
-                    ignore_index=True
-                )
-
-                log_file = get_log_file(
-                    organ=group["organ"].iloc[0],
-                    dataset=group["dataset"].iloc[0],
-                    slide_id=slide_id,
-                )
-                with open(log_file, "a") as f:
-                    f.write(log_entries.to_string(header=False, index=False))
-                    f.write("\n")
+class NucleusRecord(TypedDict):
+    id: str
+    slide_id: str
+    polygon: NDArray[np.float32]
+    centroid: NDArray[np.float32]
 
 
-def tiling(row: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    processed_tiles = set()
-    log_file = get_log_file(
-        organ=row["organ"], dataset=row["dataset"], slide_id=row["id"]
-    )
-    if log_file.exists():
-        with log_file.open("r") as f:
-            for line in f:
-                x_str, y_str = line.split()
-                processed_tiles.add((int(x_str), int(y_str)))
-
-    for x, y in grid_tiles(
-        slide_extent=(row["extent_x"], row["extent_y"]),
-        tile_extent=(row["tile_extent_x"], row["tile_extent_y"]),
-        stride=(row["stride_x"], row["stride_y"]),
-        last="keep",
-    ):
-        if (x, y) not in processed_tiles:
-            yield {
-                "tile_x": x,
-                "tile_y": y,
-                "path": row["path"],
-                "slide_id": row["id"],
-                "organ": row["organ"],
-                "dataset": row["dataset"],
-                "level": row["level"],
-                "tile_extent_x": row["tile_extent_x"],
-                "tile_extent_y": row["tile_extent_y"],
-            }
+class TilePolygonRecord(TypedDict):
+    slide_id: str
+    tile_x: int
+    tile_y: int
+    polygons: list[NDArray[np.float32]]
 
 
 class Model:
@@ -109,132 +68,153 @@ class Model:
         self.model = AutoModelForObjectDetection.from_pretrained(
             "RationAI/LSP-DETR",
             trust_remote_code=True,
-            token="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",
         ).to(self.device)
         self.model = self.model.eval()
         self.processor = AutoImageProcessor.from_pretrained(
             "RationAI/LSP-DETR",
             trust_remote_code=True,
-            token="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",
         )
 
     @torch.inference_mode()
     @torch.autocast(device_type="cuda", dtype=torch.float16)
-    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, batch: dict[str, Any]) -> TilePolygonRecord:
+        """Segments nuclei in a tile and extracts polygons.
+
+        Args:
+            batch (dict): Tile metadata and image.
+                - "path" (str): Slide path.
+                - "tile_x" (int): X-coordinate of the tile.
+                - "tile_y" (int): Y-coordinate of the tile.
+                - "tile" (PIL.Image or np.ndarray): Tile image.
+        """
         inputs = self.processor(
             batch["tile"].copy(), device=self.device, return_tensors="pt"
         )
         outputs = self.model(**inputs)
-
-        labels = outputs["logits"].argmax(dim=-1)
-        non_no_object_indices = labels != outputs["logits"].size(-1) - 1
+        results = self.processor.post_process(outputs)
 
         return {
             "slide_id": batch["slide_id"],
-            "organ": batch["organ"],
-            "dataset": batch["dataset"],
             "tile_x": batch["tile_x"],
             "tile_y": batch["tile_y"],
-            "radial_distances": [
-                outputs["radial_distances"][b, indices].expm1().cpu().numpy()
-                for b, indices in enumerate(non_no_object_indices)
-            ],
-            "points": [
-                outputs["absolute_points"][b, indices].cpu().numpy()
-                for b, indices in enumerate(non_no_object_indices)
-            ],
+            "polygons": [result["polygons"].cpu().numpy() for result in results],
+        }
+
+
+def tiling(slide_record: SlideRecord) -> Iterator[TileRecord]:
+    """Yields metadata for unprocessed tiles of a slide.
+
+    Note: The tiling step is not separated as per usual, as tiles are only used within
+          this pipeline and persisting them would not have an additional benefit.
+    """
+    for x, y in grid_tiles(
+        slide_extent=(slide_record["extent_x"], slide_record["extent_y"]),
+        tile_extent=(slide_record["tile_extent_x"], slide_record["tile_extent_y"]),
+        stride=(slide_record["stride_x"], slide_record["stride_y"]),
+        last="keep",
+    ):
+        yield {
+            "tile_x": x,
+            "tile_y": y,
+            "path": slide_record["path"],
+            "slide_id": Path(slide_record["path"]).stem,
+            "mpp_x": slide_record["mpp_x"],
+            "mpp_y": slide_record["mpp_y"],
+            "extent_x": slide_record["extent_x"],
+            "extent_y": slide_record["extent_y"],
+            "tile_extent_x": slide_record["tile_extent_x"],
+            "tile_extent_y": slide_record["tile_extent_y"],
+            "level": slide_record["level"],
+        }
+
+
+def drop_duplicates(
+    tile_record: TilePolygonRecord, tile_extent: int, overlap: int
+) -> Iterator[NucleusRecord]:
+    """Filters out nuclei near tile borders to avoid duplicates.
+
+    For each nucleus, its centroid is computed and checked to ensure it lies within
+    the non-overlapping region. Remaining polygons and centroids are adjusted to
+    absolute slide coordinates.
+    """
+    if len(tile_record["polygons"]) == 0:
+        return
+
+    polygons_arr = np.stack(tile_record["polygons"], axis=0)
+    centroids = polygons_arr.mean(axis=1)
+    keep = np.all(centroids >= overlap / 2, axis=-1) & np.all(
+        centroids < tile_extent - overlap / 2, axis=-1
+    )
+
+    offset = np.array((tile_record["tile_x"], tile_record["tile_y"]), dtype=np.float32)
+    polygons = polygons_arr[keep] + offset
+    centroids = centroids[keep] + offset
+
+    for i, (polygon, centroid) in enumerate(zip(polygons, centroids, strict=True)):
+        nucleus_key = f"{tile_record['slide_id']}{tile_record['tile_x']}{tile_record['tile_y']}{i}"
+
+        yield {
+            "id": hashlib.sha256(nucleus_key.encode()).hexdigest(),
+            "slide_id": tile_record["slide_id"],
+            "polygon": polygon,
+            "centroid": centroid,
         }
 
 
 def filter_tissue_tiles(row: dict[str, Any]) -> bool:
-    if row["tile"].std() > 8:
-        return True
-
-    log_file = get_log_file(
-        organ=row["organ"], dataset=row["dataset"], slide_id=row["slide_id"]
-    )
-    with open(log_file, "a") as f:
-        f.write(f"{row['tile_x']} {row['tile_y']}\n")
-
-    return False
+    return row["tile"].std() > 8
 
 
-def drop_duplicates(row: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    keep = np.all(row["points"] >= OVERLAP / 2, axis=-1) & np.all(
-        row["points"] < TILE_EXTENT - OVERLAP / 2, axis=-1
+@with_cli_args(["+preprocessing=nuclei_segmentation"])
+@hydra.main(config_path="../configs", config_name="preprocessing", version_base=None)
+@autolog
+def main(config: DictConfig, _: MLFlowLogger) -> None:
+    slides = read_slides(
+        config.slides_path,
+        mpp=config.mpp,
+        tile_extent=config.tile_extent,
+        stride=config.tile_extent - config.overlap,
     )
 
-    offset = np.array((row["tile_x"], row["tile_y"]), dtype=np.float32)
-    radial_distances = row["radial_distances"][keep]
-    points = row["points"][keep] + offset
-
-    if len(radial_distances) == 0:
-        log_file = get_log_file(
-            organ=row["organ"], dataset=row["dataset"], slide_id=row["slide_id"]
-        )
-        with open(log_file, "a") as f:
-            f.write(f"{row['tile_x']} {row['tile_y']}\n")
-        return
-
-    for radial_distances, points in zip(radial_distances, points, strict=True):
-        yield {
-            "slide_id": row["slide_id"],
-            "organ": row["organ"],
-            "dataset": row["dataset"],
-            "tile_x": row["tile_x"],
-            "tile_y": row["tile_y"],
-            "radial_distances": radial_distances,
-            "points": points,
-        }
-
-
-def add_slide_metadata(row: dict[str, Any]) -> dict[str, Any]:
-    row["organ"] = Path(row["path"]).parent.name
-    row["dataset"] = Path(row["path"]).parent.parent.name
-    return row_hash(row)
-
-
-def main() -> None:
-    slides = read_slides(INPUT_SLIDES, mpp=0.25, tile_extent=TILE_EXTENT, stride=STRIDE)
-    slides = slides.map(add_slide_metadata, num_cpus=0.1, memory=128 * 1024 * 1024)
-    slides.write_parquet(
-        OUTPUT_SLIDES,
-        partition_cols=["organ", "dataset"],
-    )
-
-    tiles = slides.flat_map(tiling, num_cpus=0.2, memory=128 * 1024**2).repartition(
+    tiles = slides.flat_map(tiling, num_cpus=0.1, memory=128 * 1024**2).repartition(
         target_num_rows_per_block=128
     )
+    tissue_tiles = (
+        tiles.with_column(
+            "tile",
+            read_slide_tiles(
+                col("path"),
+                col("tile_x"),
+                col("tile_y"),
+                col("tile_extent_x"),
+                col("tile_extent_y"),
+                col("level"),
+            ),
+            num_cpus=1,
+            memory=5 * 1024**3,
+        )
+        .filter(filter_tissue_tiles, memory=3 * 1024**3)
+        .repartition(target_num_rows_per_block=config.batch_size * 16)
+    )
 
-    tissue_tiles = tiles.map_batches(
-        read_slide_tiles, num_cpus=1, memory=5 * 1024**3
-    ).filter(filter_tissue_tiles, memory=3 * 1024**3)
-    tissue_tiles = tissue_tiles.repartition(target_num_rows_per_block=180)
     nuclei = tissue_tiles.map_batches(
         Model,
         num_gpus=1,
         num_cpus=0,
-        batch_size=18,
+        batch_size=config.batch_size,
         memory=3 * 1024**3,
-        concurrency=4,
+        concurrency=1,
         zero_copy_batch=True,
     )
-    nuclei = nuclei.flat_map(drop_duplicates, num_cpus=0.1, memory=1.5 * 1024**3)
-
-    nuclei.write_datasink(
-        ParquetDatasinkWithLogs(
-            OUTPUT_NUCLEI,
-            partition_cols=["organ", "dataset", "slide_id"],
-        )
+    nuclei = nuclei.flat_map(
+        drop_duplicates,
+        fn_kwargs={"tile_extent": config.tile_extent, "overlap": config.overlap},
+        num_cpus=0.1,
+        memory=1.5 * 1024**3,
     )
+    nuclei.write_parquet(config.nuclei_path, partition_cols=["slide_id"])
+    ray.shutdown()
 
 
 if __name__ == "__main__":
-    ray.init(
-        num_cpus=int(os.environ["SLURM_CPUS_ON_NODE"]),
-        _memory=(memory := int(os.environ["SLURM_MEM_PER_NODE"]) * 1024**2),
-        object_store_memory=int(memory * 0.3),
-        enable_resource_isolation=True,
-    )
     main()
-    ray.shutdown()

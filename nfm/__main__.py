@@ -8,7 +8,7 @@ from nfm.data import DataModule
 from nfm.ssl_meta_arch import SSLMetaArch
 
 
-@hydra.main(config_path="../configs", config_name="default", version_base=None)
+@hydra.main(config_path="../configs", config_name="nfm", version_base=None)
 def main(config: DictConfig) -> None:
     torch.set_float32_matmul_precision("medium")
     seed_everything(config.seed, workers=True)

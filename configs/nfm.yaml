@@ -1,6 +1,5 @@
 defaults:
-  - hydra: default
-  - logger: mlflow
+  - base
   - _self_
 
 seed: 0
@@ -28,8 +27,3 @@ trainer:
 model:
   warmup_steps: 1000
   lamb: 0.1
-
-metadata:
-  run_name: ???
-  description: ???
-  hyperparams: {}

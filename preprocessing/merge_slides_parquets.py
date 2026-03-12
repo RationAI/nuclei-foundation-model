@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 
+
 DATASET_REGEX = re.compile(r"dataset=([^/]+)")
 ORGAN_REGEX = re.compile(r"organ=([^/]+)")
 SLIDE_ID_REGEX = re.compile(r"slide_id=([^/]+)")
@@ -51,7 +52,7 @@ with ThreadPoolExecutor(max_workers=max_workers) as executor:
 
         # Optional: Print progress
         if (i + 1) % 10000 == 0:
-            print(f"Processed {i+1}/{len(all_files)} files...")
+            print(f"Processed {i + 1}/{len(all_files)} files...")
 
 
 counts_df = pd.DataFrame(results_list)
