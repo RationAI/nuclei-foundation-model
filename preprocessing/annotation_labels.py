@@ -63,7 +63,7 @@ def label_nuclei(
 @autolog
 def main(config: DictConfig, logger: MLFlowLogger) -> None:
     slides = ray.data.from_items(
-        [{"path": p} for p in Path(config.slides_path).glob("*.tiff")]
+        [{"path": p} for p in Path(config.slides_path).glob("*.tif")]
     )
 
     labeled_nuclei = slides.flat_map(
