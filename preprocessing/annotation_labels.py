@@ -42,11 +42,11 @@ def label_nuclei(
     scale_x = mask_extent_x / wsi_extent_x
     scale_y = mask_extent_y / wsi_extent_y
 
-    polygons = rearrange(nuclei["polygon"].tolist(), "b (v d) -> b v d", d=2)
+    polygons = np.stack(nuclei["polygon"]).reshape(-1, 64, 2)
     coords = np.round(polygons * np.array([scale_x, scale_y])).astype(int)
     x_coords = np.clip(coords[..., 0], 0, mask_extent_x - 1)
     y_coords = np.clip(coords[..., 1], 0, mask_extent_y - 1)
-    coverage = np.mean(annot_mask[y_coords, x_coords] != 0, axis=1)
+    coverage = np.mean(annot_mask[y_coords, x_coords] != 0, axis=1) / 255
 
     for nuc_id, cov in zip(nuclei["id"], coverage, strict=True):
         yield {
