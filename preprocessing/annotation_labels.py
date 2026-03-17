@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import ray
 import tifffile
-from einops import rearrange
 from numpy.typing import NDArray
 from omegaconf import DictConfig
 from openslide import OpenSlide
@@ -27,7 +26,7 @@ def label_nuclei(
     inside the annotation mask. Nuclei with coverage >= overlap_thr are
     labeled as annotated (1), otherwise 0.
     """
-    slide_path = slide_record["path"]
+    slide_path = Path(slide_record["path"])
     slide_id = slide_path.stem
 
     nuclei_path = nuclei_dir / f"slide_id={slide_id}"
@@ -61,7 +60,7 @@ def label_nuclei(
 @autolog
 def main(config: DictConfig, logger: MLFlowLogger) -> None:
     slides = ray.data.from_items(
-        [{"path": p} for p in Path(config.slides_path).glob("*.tif")]
+        [{"path": str(p)} for p in Path(config.slides_path).glob("*.tif")]
     )
 
     labeled_nuclei = slides.flat_map(
