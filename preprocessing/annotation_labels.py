@@ -34,7 +34,7 @@ def label_nuclei(
     nuclei = pd.read_parquet(nuclei_path, columns=["id", "polygon"])
 
     annot_mask_path = annot_masks_dir / slide_path.name
-    annot_mask: NDArray[np.uint8] = tifffile.imread(annot_mask_path).squeeze()
+    annot_mask: NDArray[np.uint8] = tifffile.imread(annot_mask_path)[..., 0]
 
     mask_extent_y, mask_extent_x = annot_mask.shape
     with OpenSlide(slide_path) as slide:
