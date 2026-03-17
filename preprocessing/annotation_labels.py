@@ -28,7 +28,7 @@ def label_nuclei(
     inside the annotation mask. Nuclei with coverage >= overlap_thr are
     labeled as annotated (1), otherwise 0.
     """
-    slide_path = Path(slide_record["path"])
+    slide_path = slide_record["path"]
     slide_id = slide_path.stem
     dataset_name = slide_path.parents[0].name
 
@@ -62,11 +62,8 @@ def label_nuclei(
 @hydra.main(config_path="../configs", config_name="preprocessing", version_base=None)
 @autolog
 def main(config: DictConfig, logger: MLFlowLogger) -> None:
-    slides = read_slides(
-        config.slides_path,
-        tile_extent=config.tile_extent,
-        stride=config.tile_extent - config.overlap,
-        level=0,
+    slides = ray.data.from_items(
+        [{"path": p} for p in Path(config.slides_path).glob("*.tiff")]
     )
 
     labeled_nuclei = slides.flat_map(

@@ -13,6 +13,7 @@ from torch.utils.data import Dataset
 from nfm.data.efd import elliptic_fourier_descriptors
 from nfm.modeling.block_mask import create_block_quantized_knn_mask
 
+
 type Sample = dict[str, NDArray[np.float32] | BlockMask]
 
 

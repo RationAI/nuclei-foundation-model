@@ -9,7 +9,7 @@ from torch import Tensor
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from nfm.configuration import Config
-from nfm.modeling.transformer import NucleiGraphEncoder
+from nfm.modeling.transformer import NFM
 
 
 class SSLMetaArch(LightningModule):
@@ -17,30 +17,22 @@ class SSLMetaArch(LightningModule):
         super().__init__()
         self.warmup_steps = warmup_steps
         self.lamb = lamb
-        self.config = Config(**config)
 
-        self.model = NucleiGraphEncoder(self.config)
+        self.model = NFM(Config(**config))
 
         univariate_test = lejepa.univariate.EppsPulley(n_points=17)
-        self.loss_fn = lejepa.multivariate.SlicingUnivariateTest(
+        self.sigreg_loss = lejepa.multivariate.SlicingUnivariateTest(
             univariate_test=univariate_test, num_slices=1024
         )
 
     def forward(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
-        pos, embed = batch["local_crops"]
         _, local_proj = self.model(
-            src=embed.flatten(0, 1),
-            src_pos=pos.flatten(0, 1),
-            tgt_pos=batch["local_spatial_registers"].flatten(0, 1),
+            batch["efds"], batch["pos"], batch["local_block_mask"]
         )
         local_proj = rearrange(local_proj, "(b n) d -> b n d", b=len(pos))
 
         pos, embed = batch["global_crops"]
-        _, global_proj = self.model(
-            src=embed.flatten(0, 1),
-            src_pos=pos.flatten(0, 1),
-            tgt_pos=batch["global_spatial_registers"].flatten(0, 1),
-        )
+        _, global_proj = self.model(src=embed.flatten(0, 1), src_pos=pos.flatten(0, 1))
         global_proj = rearrange(global_proj, "(b n) d -> b n d", b=len(pos))
 
         return global_proj, torch.cat([global_proj, local_proj], dim=1)
@@ -50,7 +42,7 @@ class SSLMetaArch(LightningModule):
 
         centers = g_emb.mean(dim=1, keepdim=True)
         inv_loss = (a_emb - centers).square().mean()
-        sigreg_loss = self.loss_fn(a_emb)
+        sigreg_loss = self.sigreg_loss(a_emb)
         lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
 
         avg_norm = torch.linalg.norm(a_emb, dim=-1).mean()
