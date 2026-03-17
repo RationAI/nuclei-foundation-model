@@ -14,7 +14,6 @@ from omegaconf import DictConfig
 from openslide import OpenSlide
 from rationai.mlkit import autolog, with_cli_args
 from rationai.mlkit.lightning.loggers import MLFlowLogger
-from ratiopath.ray import read_slides
 
 
 def label_nuclei(
@@ -30,9 +29,8 @@ def label_nuclei(
     """
     slide_path = slide_record["path"]
     slide_id = slide_path.stem
-    dataset_name = slide_path.parents[0].name
 
-    nuclei_path = nuclei_dir / dataset_name / f"slide_id={slide_id}"
+    nuclei_path = nuclei_dir / f"slide_id={slide_id}"
     nuclei = pd.read_parquet(nuclei_path, columns=["id", "polygon"])
 
     annot_mask_path = annot_masks_dir / f"{slide_id}.tiff"
