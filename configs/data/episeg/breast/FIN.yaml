@@ -1,3 +1,4 @@
 name: breast FIN
 slides: /mnt/projects/epithelium_segmentation/breast/FIN/tif/rgb
 nuclei: ${project_path}/nuclei/breast/FIN
+annot_masks: /mnt/projects/epithelium_segmentation/breast/FIN/tif/label

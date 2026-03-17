@@ -1,0 +1,9 @@
+# @package _global_
+
+slides_path: ${data.slides}
+nuclei_path: ${data.nuclei}
+annot_masks_path: ${data.annot_masks}
+mlflow_artifact_path: annotation_labels
+
+metadata:
+  run_name: "Annotation Labels: ${data.name}"
