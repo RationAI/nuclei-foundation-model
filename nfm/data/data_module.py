@@ -36,10 +36,10 @@ def inference_collate_fn(
     batch: list[dict[str, Tensor]],
 ) -> dict[str, Tensor | BlockMask]:
     seq_lens = torch.tensor([len(b["pos"]) for b in batch], dtype=torch.int32)
-    attention_neighbors = [b["attention_neighbors"] for b in batch]
+    knn = [b["knn"] for b in batch]
     return {
         "block_mask": create_batched_block_quantized_knn_mask(
-            attention_neighbors, seq_lens, block_size=128
+            knn, seq_lens, block_size=128
         ),
         "pos": torch.stack([b["pos"] for b in batch]),
         "efds": torch.stack([b["efds"] for b in batch]),
