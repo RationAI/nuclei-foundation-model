@@ -7,6 +7,10 @@ data:
     _target_: nfm.data.datasets.NucleiDataset
     slides_path: /flash/project_465002057/nuclei/train_cropped_dedup.parquet
     nuclei_path: /flash/project_465002057/nuclei/cells
+  train_labeled:
+    _target_: nfm.data.datasets.ClassificationNucleiDataset
+    slides_path: /flash/project_465002057/nuclei/labeled_nuclei/slide_metadata.parquet
+    nuclei_path: /flash/project_465002057/nuclei/labeled_nuclei/labels
 
 metadata:
   run_name: Training

@@ -1,143 +1,127 @@
+import math
+
 import numpy as np
 import torch
-from numpy.typing import NDArray
-from scipy.spatial import KDTree
 from torch import Tensor
 from torch.nn.attention.flex_attention import BlockMask
+from torch.nn.utils.rnn import pad_sequence
 
 
-def attend_all_mask_mod(
-    batch: Tensor, head: Tensor, q_idx: Tensor, kv_idx: Tensor
-) -> Tensor:
-    return torch.ones_like(batch, dtype=torch.bool)
-
-
-def create_block_quantized_knn_mask(
-    kdtree: KDTree,
-    points: NDArray[np.floating],
-    n_points_unpadded: int,
-    k: int,
+def create_batched_block_quantized_knn_mask(
+    neighbor_indices_list: list[Tensor],
+    seq_lens: Tensor,
     block_size: int,
-    symmetric: bool = True,
+    symmetric: bool = False,
 ) -> BlockMask:
-    """Generates a single-item BlockMask from a KDTree and a corresponding point array.
+    """Creates a batched BlockMask directly from variable-length neighbor indices.
 
-    Padded points (at the end of the array) are excluded so that they neither attend to nor are attended by any key/value blocks.
+    Natively supports sequences not divisible by block_size without artificial padding.
 
     Args:
-        kdtree: KDTree built over the points.
-        points: A sorted (n, d) numpy array of positions, n must be divisible by the `block_size`.
-        k: Number of neighbors to query, at least 1.
-        n_points_unpadded: Number of points without the padding.
-        block_size: Number of points per block.
+        neighbor_indices_list: List of Tensors shape (N_i, K) containing neighbor indices.
+        seq_lens: List of unpadded sequence lengths for each batch item.
+        block_size: Size of the attention block.
+        symmetric: Whether to symmetrize the connections.
 
     Returns:
-        A BlockMask object with layouts (Batch, Head, ...):
-            - kv_num_blocks: (1, 1, num_blocks), number of key/value blocks per query block
-            - kv_indices: (1, 1, num_blocks, num_blocks), indices of key/value blocks
-            - q_num_blocks: (1, 1, num_blocks), count of query blocks per key/value block (derived).
-            - q_indices: (1, 1, num_blocks, num_blocks), indices of query blocks (derived).
-            - BLOCK_SIZE: (block_size, block_size)
-            - shape: (1, 1, seq_length, seq_length)
-        where num_blocks = seq_length // block_size, seq_length % block_size = 0
+        Batched BlockMask configured with full/partial kernel metadata.
     """
-    n_points = points.shape[0]
-    assert k >= 1 and n_points % block_size == 0
-    num_blocks = n_points // block_size
+    neighbor_indices = pad_sequence(
+        neighbor_indices_list, batch_first=True, padding_value=-1
+    )
+    B, N, K = neighbor_indices.shape
+    num_blocks = math.ceil(N / block_size)
 
-    # 1. Build Block Adjacency Mask from a kNN Query (Q -> K mapping)
-    # ----------------------------------------------------------------
-    _, neighbor_indices = kdtree.query(points[:n_points_unpadded], k=k)
-    neighbor_indices = neighbor_indices[:, None] if k == 1 else neighbor_indices
+    q_idx = torch.arange(N).view(1, N, 1).expand(B, N, K)
+    kv_idx = neighbor_indices
+    seq_lens_view = seq_lens.view(B, 1, 1)
+    valid_mask = (q_idx < seq_lens_view) & (kv_idx < seq_lens_view) & (kv_idx >= 0)
 
-    q_block_ids = np.arange(n_points_unpadded) // block_size
-    kv_block_ids = neighbor_indices // block_size
+    q_block_ids = q_idx // block_size
+    kv_block_ids = kv_idx // block_size
 
-    adj_matrix = np.zeros((num_blocks, num_blocks), dtype=bool)
-    valid_mask = neighbor_indices < n_points_unpadded
-    q_block_ids_expanded = np.broadcast_to(q_block_ids[:, None], valid_mask.shape)
+    adj_matrix = torch.zeros((B, num_blocks, num_blocks), dtype=torch.bool)
+    b_idx = torch.arange(B).view(B, 1, 1).expand(B, N, K)
+    adj_matrix[b_idx[valid_mask], q_block_ids[valid_mask], kv_block_ids[valid_mask]] = (
+        True
+    )
 
-    # mark blocks as connected if any point in Q attends to any point in K
-    adj_matrix[q_block_ids_expanded[valid_mask], kv_block_ids[valid_mask]] = True
-
-    # Enforce symmetric block graph
     if symmetric:
-        adj_matrix = adj_matrix | adj_matrix.T
+        adj_matrix = adj_matrix | adj_matrix.mT
 
-    # 2. Convert adjacency to BlockMask format:
-    # ----------------------------------------------------------------
-    kv_counts = adj_matrix.sum(axis=1)
-    kv_num_blocks = torch.from_numpy(kv_counts).int().unsqueeze(0)
-    kv_indices = torch.full((1, num_blocks, num_blocks), -1, dtype=torch.int32)
+    kv_num_blocks = adj_matrix.sum(dim=-1).to(torch.int32)
 
-    rows, cols = np.nonzero(adj_matrix)
-    # sort connections by Q-block and then KV-block to ensure that slot indices are contiguous
-    # within each Q-block (required by BlockMask)
-    order = np.lexsort((cols, rows))  # sort keys are (secondary, primary)
-    rows = rows[order]
-    cols = cols[order]
+    col_indices = (
+        torch.arange(num_blocks)
+        .view(1, 1, num_blocks)
+        .expand(B, num_blocks, num_blocks)
+    )
+    masked_col_indices = torch.where(
+        adj_matrix, col_indices, torch.tensor(num_blocks + 1)
+    )
+    sorted_indices, _ = masked_col_indices.sort(dim=-1)
 
-    # compute the slot indices for kv_indices[0, Q-block, slot]
-    cum_counts = np.cumsum(kv_counts)
-    q_block_offsets = np.zeros_like(cum_counts)
-    q_block_offsets[1:] = cum_counts[:-1]
-    global_idx = np.arange(len(rows))
-    slot_idx = global_idx - q_block_offsets[rows]
+    kv_indices = torch.where(
+        sorted_indices > num_blocks,
+        torch.tensor(-1, dtype=torch.int32),
+        sorted_indices.to(torch.int32),
+    )
 
-    kv_indices[0, rows, slot_idx] = torch.from_numpy(cols).int()
+    kv_num_blocks = kv_num_blocks.unsqueeze(1)
+    kv_indices = kv_indices.unsqueeze(1)
+
+    full_kv_indices = kv_indices.clone()
+    num_fully_valid_blocks = seq_lens // block_size
+
+    q_blk_idx = torch.arange(num_blocks).view(1, 1, num_blocks)
+    mixed_q_mask = q_blk_idx >= num_fully_valid_blocks.view(B, 1, 1)
+    mixed_kv_mask = full_kv_indices >= num_fully_valid_blocks.view(B, 1, 1, 1)
+
+    full_kv_indices.masked_fill_(mixed_q_mask.unsqueeze(-1), -1)
+    full_kv_indices.masked_fill_(mixed_kv_mask, -1)
+    full_kv_num_blocks = (full_kv_indices != -1).sum(dim=-1).to(torch.int32)
+
+    def padding_mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
+        return (q < seq_lens[b]) & (kv < seq_lens[b])
 
     return BlockMask.from_kv_blocks(
-        kv_num_blocks=kv_num_blocks.unsqueeze(0),  # add head dim
-        kv_indices=kv_indices.unsqueeze(0),  # add head dim
-        full_kv_num_blocks=kv_num_blocks.unsqueeze(0),  # add head dim
-        full_kv_indices=kv_indices.unsqueeze(0),  # add head dim
-        BLOCK_SIZE=block_size,
-        # mask_mod=attend_all_mask_mod,
-    )
-
-
-def batch_block_masks(masks: list[BlockMask]) -> BlockMask:
-    """Batch a list of single-item BlockMask objects into one batched BlockMask.
-
-    All masks must have the same sequence length and block size.
-    Different neighbor counts (at the block level) are handled by padding.
-
-    Args:
-        masks: List of BlockMask objects.
-
-    Returns:
-        Batched BlockMask object with layouts (Batch, Head, ...):
-            - kv_num_blocks: (b, 1, num_blocks)
-            - kv_indices: (b, 1, num_blocks, max_kv_blocks)
-            - q_num_blocks: (b, 1, num_blocks) (derived)
-            - q_indices: (b, 1, num_blocks, num_blocks) (derived)
-            - BLOCK_SIZE: (block_size, block_size)
-            - shape: (b, 1, seq_length, seq_length)
-        where
-            b = batch size,
-            num_blocks = seq_length // block_size,
-            max_kv_blocks = maximum number of KV blocks per query block across the batch,
-        The "mask_mod" is inherited from the first mask.
-    """
-    assert all(m.shape == masks[0].shape for m in masks)
-    assert all(m.BLOCK_SIZE == masks[0].BLOCK_SIZE for m in masks)
-
-    kv_num_blocks = torch.cat([m.kv_num_blocks for m in masks], dim=0)
-    kv_indices_list = [m.kv_indices for m in masks]
-
-    max_kv_len = max(kv.shape[-1] for kv in kv_indices_list)
-    padded_kv_indices = [
-        torch.nn.functional.pad(kv, (0, max_kv_len - kv.shape[-1]), "constant", -1)
-        for kv in kv_indices_list
-    ]
-    kv_indices = torch.cat(padded_kv_indices, dim=0)
-
-    batched_mask = BlockMask.from_kv_blocks(
         kv_num_blocks=kv_num_blocks,
         kv_indices=kv_indices,
-        full_kv_num_blocks=None,
-        full_kv_indices=None,
-        BLOCK_SIZE=masks[0].BLOCK_SIZE,
-        mask_mod=masks[0].mask_mod,
+        full_kv_num_blocks=full_kv_num_blocks,
+        full_kv_indices=full_kv_indices,
+        BLOCK_SIZE=(block_size, block_size),
+        mask_mod=padding_mask_mod,
     )
-    return batched_mask
+
+
+def block_spatial_sort(points: np.ndarray, block_size: int) -> np.ndarray:
+    n = len(points)
+    out = np.arange(n)
+
+    # Stack holds (start, end, depth) — operate on out[start:end] in-place
+    stack = [(0, n, 0)]
+
+    while stack:
+        start, end, depth = stack.pop()
+        size = end - start
+
+        if size <= block_size:
+            continue
+
+        segment = out[start:end]
+
+        # Partial sort: only need to put left_blocks*block_size elements on the left
+        num_blocks = math.ceil(size / block_size)
+        left_blocks = num_blocks // 2
+        split = left_blocks * block_size
+
+        # np.argpartition avoids full sort — O(n) instead of O(n log n) per level
+        axis = depth % 2
+        local_pts = points[segment, axis]
+        pivot_idx = np.argpartition(local_pts, split - 1)
+        segment[:] = segment[pivot_idx]
+
+        stack.append((start, start + split, depth + 1))
+        stack.append((start + split, end, depth + 1))
+
+    return out

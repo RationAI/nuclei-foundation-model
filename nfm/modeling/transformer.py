@@ -7,6 +7,7 @@ from torchvision.ops import MLP
 from nfm.configuration import Config
 from nfm.modeling.layers import FeedForward, RoPE
 
+
 flex_attention = torch.compile(flex_attention)
 
 
@@ -49,11 +50,11 @@ class Layer(nn.Module):
         )
         self.ffn = FeedForward(config.dim, config.hidden_dim)
 
-        self.pre_self_attn_norm = nn.RMSNorm(config.dim)
+        self.pre_attn_norm = nn.RMSNorm(config.dim)
         self.pre_ffn_norm = nn.RMSNorm(config.dim)
 
     def forward(self, x: Tensor, pos: Tensor, block_mask: BlockMask) -> Tensor:
-        y = self.pre_self_attn_norm(x)
+        y = self.pre_attn_norm(x)
         x = x + self.self_attn(y, pos, block_mask)
 
         y = self.pre_ffn_norm(x)

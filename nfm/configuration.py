@@ -8,9 +8,9 @@ class Config(PretrainedConfig):
 
     def __init__(
         self,
-        dim: int = 384,
+        dim: int = 384,  # 1280,
         hidden_dim: int = 384 * 4,
-        num_heads: int = 12,
+        num_heads: int = 12,  # 16,
         num_layers: int = 24,
         rope_theta: float = 10000,
         efd_order: int = 16,
