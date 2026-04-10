@@ -165,9 +165,9 @@ class NucleiDataset(Dataset[Sample]):
             polygons, mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
         )
 
-        indices = block_spatial_sort(centroids, self.block_size)
-        centroids = centroids[indices]
-        efds = efds[indices]
+        sort_indices = block_spatial_sort(centroids, self.block_size)
+        centroids = centroids[sort_indices]
+        efds = efds[sort_indices]
 
         _, knn = self.nbrs.fit(centroids).kneighbors(centroids)
         pad_len = self.global_crop_k - len(centroids)

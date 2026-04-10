@@ -26,17 +26,18 @@ class ClassificationNucleiDataset(NucleiDataset):
 
         # crop generation
         seed = random.randint(0, len(points) - 1)
-        indices = self.find_component(seed, self.global_crop_k, graph, points)
+        comp_indices = self.find_component(seed, self.global_crop_k, graph, points)
+        indices = keep_indices[comp_indices]
 
         centroids, efds = self.polygon_to_efd(
-            polygons[keep_indices], mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
+            polygons[indices], mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
         )
 
-        indices = block_spatial_sort(centroids, self.block_size)
+        sort_indices = block_spatial_sort(centroids, self.block_size)
 
-        centroids = centroids[indices]
-        efds = efds[indices]
-        labels = labels[keep_indices][indices]
+        centroids = centroids[sort_indices]
+        efds = efds[sort_indices]
+        labels = labels[indices][sort_indices]
 
         _, knn = self.nbrs.fit(centroids).kneighbors(centroids)
         pad_len = self.global_crop_k - len(centroids)
