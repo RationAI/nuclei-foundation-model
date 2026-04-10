@@ -1,4 +1,4 @@
-_target_: rationai.mlkit.lightning.loggers.MLFlowLogger
+_target_: lightning.pytorch.loggers.MLFlowLogger
 experiment_name: Nuclei Foundation Model
 run_name: ${metadata.run_name}
 tags:
