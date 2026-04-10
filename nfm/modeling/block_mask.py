@@ -1,4 +1,5 @@
 import math
+from typing import Self
 
 import numpy as np
 import torch
@@ -15,12 +16,15 @@ class _PaddingMaskMod:
 
     def __init__(self, seq_lens: Tensor) -> None:
         # Store as expanded view to avoid dynamic indexing in the mask function
-        # This is called once per batch, not per attention head/position
-        # the device must be fixed at initialization
-        self.seq_lens = seq_lens.view(-1, 1, 1, 1).to("cuda")  # (B, 1, 1, 1)
+        # When using spawn mp_context, CUDA can be initialized in workers
+        self.seq_lens = seq_lens.view(-1, 1, 1, 1)  # (B, 1, 1, 1)
+
+    def to(self, device: torch.device) -> Self:
+        self.seq_lens = self.seq_lens.to(device)
+        return self
 
     def __call__(self, b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
-        # Move seq_lens to same device as q/kv (they're on the same device during attention)
+        # seq_lens is already on CUDA from __init__, same device as q/kv
         return (q < self.seq_lens) & (kv < self.seq_lens)
 
 
