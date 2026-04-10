@@ -7,6 +7,16 @@ from torch.nn.attention.flex_attention import BlockMask
 from torch.nn.utils.rnn import pad_sequence
 
 
+class _PaddingMaskMod:
+    """Pickle-safe callable used by BlockMask for sequence-length padding."""
+
+    def __init__(self, seq_lens: Tensor) -> None:
+        self.seq_lens = seq_lens
+
+    def __call__(self, b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
+        return (q < self.seq_lens[b]) & (kv < self.seq_lens[b])
+
+
 def create_batched_block_quantized_knn_mask(
     neighbor_indices_list: list[Tensor],
     seq_lens: Tensor,
@@ -81,16 +91,13 @@ def create_batched_block_quantized_knn_mask(
     full_kv_indices.masked_fill_(mixed_kv_mask, -1)
     full_kv_num_blocks = (full_kv_indices != -1).sum(dim=-1).to(torch.int32)
 
-    def padding_mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
-        return (q < seq_lens[b]) & (kv < seq_lens[b])
-
     return BlockMask.from_kv_blocks(
         kv_num_blocks=kv_num_blocks,
         kv_indices=kv_indices,
         full_kv_num_blocks=full_kv_num_blocks,
         full_kv_indices=full_kv_indices,
         BLOCK_SIZE=(block_size, block_size),
-        mask_mod=padding_mask_mod,
+        mask_mod=_PaddingMaskMod(seq_lens),
     )
 
 
