@@ -31,6 +31,7 @@ class SSLMetaArch(LightningModule):
     def forward(
         self, x: Tensor, pos: Tensor, block_mask: BlockMask
     ) -> tuple[Tensor, Tensor]:
+        print(x.shape, pos.shape)
         return self.model(x, pos, block_mask)
 
     def forward_unlabeled(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
