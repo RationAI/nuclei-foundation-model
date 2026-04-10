@@ -17,7 +17,7 @@ class _PaddingMaskMod:
     def __init__(self, seq_lens: Tensor) -> None:
         # Store as expanded view to avoid dynamic indexing in the mask function
         # When using spawn mp_context, CUDA can be initialized in workers
-        self.seq_lens = seq_lens.view(-1, 1, 1, 1)  # (B, 1, 1, 1)
+        self.seq_lens = seq_lens
 
     def to(self, device: torch.device) -> Self:
         self.seq_lens = self.seq_lens.to(device)
@@ -25,7 +25,7 @@ class _PaddingMaskMod:
 
     def __call__(self, b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
         # seq_lens is already on CUDA from __init__, same device as q/kv
-        return (q < self.seq_lens) & (kv < self.seq_lens)
+        return (q < self.seq_lens[b]) & (kv < self.seq_lens[b])
 
 
 def create_batched_block_quantized_knn_mask(
