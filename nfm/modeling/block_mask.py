@@ -1,5 +1,4 @@
 import math
-from typing import Self
 
 import numpy as np
 import torch
@@ -11,21 +10,21 @@ from torch.nn.utils.rnn import pad_sequence
 class _PaddingMaskMod:
     """Pickle-safe callable used by BlockMask for sequence-length padding.
 
-    Pre-computed per-batch scalar to avoid dynamic indexing in pointwise subgraph.
+    Avoid tensor indexing (`seq_lens[b]`) which Inductor cannot lower inside
+    flex attention's pointwise mask subgraph.
     """
 
     def __init__(self, seq_lens: Tensor) -> None:
-        # Store as expanded view to avoid dynamic indexing in the mask function
-        # When using spawn mp_context, CUDA can be initialized in workers
-        self.seq_lens = seq_lens
-
-    def to(self, device: torch.device) -> Self:
-        self.seq_lens = self.seq_lens.to(device)
-        return self
+        # Keep plain Python ints so the mask function can stay pointwise-only.
+        self.seq_lens = seq_lens.tolist()
 
     def __call__(self, b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
-        # seq_lens is already on CUDA from __init__, same device as q/kv
-        return (q < self.seq_lens[b]) & (kv < self.seq_lens[b])
+        # Build per-element sequence length using pointwise ops only.
+        # This avoids aten.index fallback during subgraph lowering.
+        seq_len = torch.full_like(q, self.seq_lens[0])
+        for idx, value in enumerate(self.seq_lens[1:], start=1):
+            seq_len = torch.where(b == idx, torch.full_like(q, value), seq_len)
+        return (q < seq_len) & (kv < seq_len)
 
 
 def create_batched_block_quantized_knn_mask(
