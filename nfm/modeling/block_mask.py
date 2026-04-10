@@ -8,13 +8,19 @@ from torch.nn.utils.rnn import pad_sequence
 
 
 class _PaddingMaskMod:
-    """Pickle-safe callable used by BlockMask for sequence-length padding."""
+    """Pickle-safe callable used by BlockMask for sequence-length padding.
+
+    Pre-computed per-batch scalar to avoid dynamic indexing in pointwise subgraph.
+    """
 
     def __init__(self, seq_lens: Tensor) -> None:
-        self.seq_lens = seq_lens
+        # Store as expanded view to avoid dynamic indexing in the mask function
+        # This is called once per batch, not per attention head/position
+        self.seq_lens = seq_lens.view(-1, 1, 1, 1)  # (B, 1, 1, 1)
 
     def __call__(self, b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
-        return (q < self.seq_lens[b]) & (kv < self.seq_lens[b])
+        # Use broadcasting instead of indexing: seq_lens already has batch dim
+        return (q < self.seq_lens) & (kv < self.seq_lens)
 
 
 def create_batched_block_quantized_knn_mask(
