@@ -28,7 +28,6 @@ def train_collate_fn(
         ),
         "pos": torch.stack([b["pos"] for b in batch]),
         "efds": torch.stack([b["efds"] for b in batch]),
-        "labels": torch.stack([b["labels"] for b in batch]),
         "seq_lens": seq_lens,
     }
 
