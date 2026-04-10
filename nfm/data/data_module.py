@@ -15,7 +15,7 @@ from nfm.modeling.block_mask import create_batched_block_quantized_knn_mask
 def train_collate_fn(
     batch: list[dict[str, Tensor]],
 ) -> dict[str, Tensor | BlockMask]:
-    seq_lens = torch.tensor([len(b["pos"]) for b in batch], dtype=torch.int32)
+    seq_lens = torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32)
 
     g_knn = [b["global_knn"] for b in batch]
     l_knn = [b["local_knn"] for b in batch]
@@ -35,7 +35,7 @@ def train_collate_fn(
 def inference_collate_fn(
     batch: list[dict[str, Tensor]],
 ) -> dict[str, Tensor | BlockMask]:
-    seq_lens = torch.tensor([len(b["pos"]) for b in batch], dtype=torch.int32)
+    seq_lens = torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32)
     knn = [b["knn"] for b in batch]
     return {
         "block_mask": create_batched_block_quantized_knn_mask(
