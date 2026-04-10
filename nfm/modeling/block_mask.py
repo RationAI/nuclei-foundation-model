@@ -16,12 +16,12 @@ class _PaddingMaskMod:
     def __init__(self, seq_lens: Tensor) -> None:
         # Store as expanded view to avoid dynamic indexing in the mask function
         # This is called once per batch, not per attention head/position
-        self.seq_lens = seq_lens.view(-1, 1, 1, 1)  # (B, 1, 1, 1)
+        # the device must be fixed at initialization
+        self.seq_lens = seq_lens.view(-1, 1, 1, 1).to("cuda")  # (B, 1, 1, 1)
 
     def __call__(self, b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
         # Move seq_lens to same device as q/kv (they're on the same device during attention)
-        seq_lens = self.seq_lens.to(q.device)
-        return (q < seq_lens) & (kv < seq_lens)
+        return (q < self.seq_lens) & (kv < self.seq_lens)
 
 
 def create_batched_block_quantized_knn_mask(
