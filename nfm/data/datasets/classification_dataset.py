@@ -16,7 +16,7 @@ class ClassificationNucleiDataset(NucleiDataset):
             f"{self.nuclei_path}/{slide.organ}/{slide.dataset}/annotation_labels/slide_id={slide.id}",
             columns=["polygon", "annot_coverage"],
         )
-        polygons = np.stack(df["polygons"]).reshape(-1, 64, 2).astype(np.float32)
+        polygons = np.stack(df["polygon"]).reshape(-1, 64, 2).astype(np.float32)
         labels = np.stack(df["annot_coverage"])
 
         points, keep_indices = self.downsample_points(
