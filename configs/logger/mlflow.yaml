@@ -2,5 +2,4 @@ _target_: lightning.pytorch.loggers.MLFlowLogger
 experiment_name: Nuclei Foundation Model
 run_name: ${metadata.run_name}
 tags:
-  mlflow.user: ${oc.env:MLFLOW_TRACKING_USERNAME, ???}
   mlflow.note.content: ${metadata.description}
