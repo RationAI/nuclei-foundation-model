@@ -134,34 +134,43 @@ def create_ragged_block_quantized_knn_mask(
     )
 
 
-def block_spatial_sort(points: np.ndarray, block_size: int) -> np.ndarray:
+def block_spatial_sort(
+    points: np.ndarray, block_size: int, global_offset: int = 0
+) -> np.ndarray:
     n = len(points)
     out = np.arange(n)
-
-    # Stack holds (start, end, depth) — operate on out[start:end] in-place
     stack = [(0, n, 0)]
 
     while stack:
         start, end, depth = stack.pop()
-        size = end - start
 
-        if size <= block_size:
+        # Translate to global sequence indices to align with hardware blocks
+        global_start = global_offset + start
+        global_end = global_offset + end - 1
+
+        start_block = global_start // block_size
+        end_block = global_end // block_size
+
+        # If the entire segment fits within a single global block, stop splitting
+        if start_block == end_block:
             continue
 
+        # Pick a split boundary at a global block transition
+        split_block = (start_block + end_block + 1) // 2
+
+        # Translate the chosen global boundary back to a local split size
+        split_local_idx = split_block * block_size - global_offset
+        split_size = split_local_idx - start
+
         segment = out[start:end]
-
-        # Partial sort: only need to put left_blocks*block_size elements on the left
-        num_blocks = math.ceil(size / block_size)
-        left_blocks = num_blocks // 2
-        split = left_blocks * block_size
-
-        # np.argpartition avoids full sort — O(n) instead of O(n log n) per level
         axis = depth % 2
         local_pts = points[segment, axis]
-        pivot_idx = np.argpartition(local_pts, split - 1)
+
+        # Partition array based on the globally-aligned split size
+        pivot_idx = np.argpartition(local_pts, split_size - 1)
         segment[:] = segment[pivot_idx]
 
-        stack.append((start, start + split, depth + 1))
-        stack.append((start + split, end, depth + 1))
+        stack.append((start, start + split_size, depth + 1))
+        stack.append((start + split_size, end, depth + 1))
 
     return out

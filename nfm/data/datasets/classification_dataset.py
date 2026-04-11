@@ -6,7 +6,6 @@ import torch
 from degraph import build_spatial_graph
 
 from nfm.data.datasets.nuclei_dataset import NucleiDataset, Sample
-from nfm.modeling.block_mask import block_spatial_sort
 
 
 class ClassificationNucleiDataset(NucleiDataset):
@@ -32,19 +31,11 @@ class ClassificationNucleiDataset(NucleiDataset):
         centroids, efds = self.polygon_to_efd(
             polygons[indices], mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
         )
-
-        sort_indices = block_spatial_sort(centroids, self.block_size)
-
-        centroids = centroids[sort_indices]
-        efds = efds[sort_indices]
-        labels = labels[indices][sort_indices]
-
-        _, knn = self.nbrs.fit(centroids).kneighbors(centroids)
+        labels = labels[indices]
 
         return {
-            "pos": torch.from_numpy(centroids),
+            "pos": centroids,
             "efds": torch.from_numpy(efds),
-            "knn": torch.from_numpy(knn),
             "labels": torch.from_numpy(labels > 0.5)[:, None],
             "seq_len": len(centroids),
         }

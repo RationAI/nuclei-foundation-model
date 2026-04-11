@@ -7,15 +7,13 @@ import pyarrow.parquet as pq
 import torch
 from degraph import build_spatial_graph
 from numpy.typing import NDArray
-from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
 from torch.utils.data import Dataset
 
 from nfm.data.efd import elliptic_fourier_descriptors
-from nfm.modeling.block_mask import block_spatial_sort
 
 
-type Sample = dict[str, Tensor]
+type Sample = dict[str, Tensor | np.ndarray | int]
 
 
 class NucleiDataset(Dataset[Sample]):
@@ -26,18 +24,14 @@ class NucleiDataset(Dataset[Sample]):
         global_crop_k: int = 4096,
         alpha: float = 0.85,
         efd_order: int = 16,
-        knn: int = 16,
-        block_size: int = 128,
     ) -> None:
         self.slides = pd.read_parquet(
             slides_path, columns=["id", "mpp_x", "mpp_y", "dataset", "organ"]
         )
-        self.block_size = block_size
         self.nuclei_path = nuclei_path
         self.global_crop_k = global_crop_k
         self.alpha = alpha
         self.efd_order = efd_order
-        self.nbrs = NearestNeighbors(n_neighbors=knn, metric="euclidean")
 
     def __len__(self) -> int:
         return len(self.slides)
@@ -165,16 +159,8 @@ class NucleiDataset(Dataset[Sample]):
             polygons, mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
         )
 
-        sort_indices = block_spatial_sort(centroids, self.block_size)
-        centroids = centroids[sort_indices]
-        efds = efds[sort_indices]
-
-        _, knn = self.nbrs.fit(centroids).kneighbors(centroids)
-
         return {
-            "pos": torch.from_numpy(centroids),
+            "pos": centroids,
             "efds": torch.from_numpy(efds),
-            "global_knn": torch.from_numpy(knn),
-            "local_knn": torch.from_numpy(knn[:, :1]),
             "seq_len": len(centroids),
         }
