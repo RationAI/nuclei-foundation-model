@@ -8,6 +8,7 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torchvision.ops import MLP
 
 from nfm.configuration import Config
 from nfm.modeling.transformer import NFM
@@ -21,7 +22,17 @@ class SSLMetaArch(LightningModule):
 
         self.config = Config(**config)
         self.model = NFM(self.config)
-        self.linear_proj = nn.Linear(self.config.dim, 1)
+        self.probe = nn.Linear(self.config.dim, 1)
+
+        self.proj = MLP(
+            self.config.dim,
+            hidden_channels=[
+                self.config.proj_hidden_dim,
+                self.config.proj_hidden_dim,
+                self.config.proj_dim,
+            ],
+            norm_layer=nn.BatchNorm1d,
+        )
 
         univariate_test = lejepa.univariate.EppsPulley(n_points=17)
         self.sigreg_loss = lejepa.multivariate.SlicingUnivariateTest(
@@ -34,28 +45,37 @@ class SSLMetaArch(LightningModule):
         return self.model(x, pos, block_mask)
 
     def forward_unlabeled(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
-        _, global_proj = self(batch["efds"], batch["pos"], batch["global_block_mask"])
-        _, local_proj = self(batch["efds"], batch["pos"], batch["local_block_mask"])
-        return global_proj, torch.cat([global_proj, local_proj], dim=1)
+        g_embed = self(batch["efds"], batch["pos"], batch["global_block_mask"])
+        l_embed = self(batch["efds"], batch["pos"], batch["local_block_mask"])
+
+        g_chunks = torch.split(g_embed, batch["seq_lens"])
+        l_chunks = torch.split(l_embed, batch["seq_lens"])
+
+        g_mean = torch.stack([chunk.mean(dim=0) for chunk in g_chunks])
+        l_mean = torch.stack([chunk.mean(dim=0) for chunk in l_chunks])
+
+        global_proj = self.proj(g_mean)
+        local_proj = self.proj(l_mean)
+
+        return global_proj, torch.stack([global_proj, local_proj], dim=1)
 
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
         with torch.no_grad():
             embed, _ = self(batch["efds"], batch["pos"], batch["block_mask"])
 
-        return self.linear_proj(embed)
+        return self.probe(embed)
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         batch_size = len(batch["unlabeled"]["seq_lens"])
         g_emb, a_emb = self.forward_unlabeled(batch["unlabeled"])
-        pred_labels = self.forward_labeled(batch["labeled"])
 
-        centers = g_emb.mean(dim=1, keepdim=True)
-        inv_loss = (a_emb - centers).square().mean()
+        inv_loss = (a_emb - g_emb[:, None]).square().mean()
         sigreg_loss = self.sigreg_loss(a_emb)
         lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
 
+        probe_labels = self.forward_labeled(batch["labeled"])
         probe_loss = F.binary_cross_entropy_with_logits(
-            pred_labels, batch["labeled"]["labels"]
+            probe_labels, batch["labeled"]["labels"]
         )
 
         avg_norm = torch.linalg.norm(a_emb, dim=-1).mean()

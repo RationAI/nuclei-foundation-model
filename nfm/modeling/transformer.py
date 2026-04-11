@@ -25,7 +25,7 @@ class SelfAttention(nn.Module):
 
     def forward(self, x: Tensor, pos: Tensor, block_mask: BlockMask) -> Tensor:
         q, k, v = rearrange(
-            self.qkv(x), "n (three h d) -> three 1 h n d", three=3, d=self.head_dim
+            self.qkv(x), "b n (three h d) -> three b h n d", three=3, d=self.head_dim
         )
         q = self.q_norm(q)
         k = self.k_norm(k)
@@ -36,7 +36,7 @@ class SelfAttention(nn.Module):
             value=v,
             block_mask=block_mask,
         )
-        x = rearrange(x, "b h n d -> n (h d)")
+        x = rearrange(x, "b h n d -> b n (h d)")
 
         return self.wo(x)
 
@@ -111,7 +111,4 @@ class NFM(nn.Module):
         x = self.bn(x)
         x = self.polygon_proj(x)
 
-        embed = self.backbone(x, pos, block_mask)
-
-        # 2. Global Average Pooling
-        return embed, self.proj(embed.mean(dim=1))
+        return self.backbone(x[None], pos[None], block_mask).squeeze(0)
