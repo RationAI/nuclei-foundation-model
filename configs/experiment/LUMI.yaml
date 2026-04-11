@@ -1,8 +1,12 @@
 # @package _global_
 
 data:
-  batch_size: 32
-  num_workers: 6
+  batch_size:
+    train: 32
+    train_labeled: 16
+  num_workers:
+    train: 4
+    train_labeled: 2
   block_size: 128
   k: 16
   train:

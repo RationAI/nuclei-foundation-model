@@ -91,10 +91,10 @@ def inference_collate_fn(
 class DataModule(LightningDataModule):
     def __init__(
         self,
-        batch_size: int,
+        batch_size: dict[str, int],
         block_size: int,
         k: int,
-        num_workers: int = 0,
+        num_workers: dict[str, int],
         **datasets: DictConfig,
     ) -> None:
         super().__init__()
@@ -113,16 +113,15 @@ class DataModule(LightningDataModule):
                 self.test = instantiate(self.datasets["test"])
 
     def train_dataloader(self) -> Iterable[dict[str, Tensor]]:
-        labeled_batch = self.batch_size // 3
 
         return CombinedLoader(
             {
                 "unlabeled": DataLoader(
                     self.train,
-                    batch_size=self.batch_size - labeled_batch,
+                    batch_size=self.batch_size["train"],
                     shuffle=True,
                     drop_last=True,
-                    num_workers=self.num_workers,
+                    num_workers=self.num_workers["train"],
                     persistent_workers=True,
                     pin_memory=True,
                     in_order=False,
@@ -132,10 +131,10 @@ class DataModule(LightningDataModule):
                 ),
                 "labeled": DataLoader(
                     self.train_labeled,
-                    batch_size=labeled_batch,
+                    batch_size=self.batch_size["train_labeled"],
                     shuffle=True,
                     drop_last=True,
-                    num_workers=self.num_workers,
+                    num_workers=self.num_workers["train_labeled"],
                     persistent_workers=True,
                     pin_memory=True,
                     in_order=False,
