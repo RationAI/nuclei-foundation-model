@@ -45,6 +45,7 @@ class SSLMetaArch(LightningModule):
         return self.linear_proj(embed)
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
+        batch_size = batch["unlabeled"]["efds"].shape[0]
         g_emb, a_emb = self.forward_unlabeled(batch["unlabeled"])
         pred_labels = self.forward_labeled(batch["labeled"])
 
@@ -53,7 +54,7 @@ class SSLMetaArch(LightningModule):
         sigreg_loss = self.sigreg_loss(a_emb)
         lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
 
-        _, N, _ = pred_labels.shape
+        labeled_batch, N, _ = pred_labels.shape
         mask = (
             torch.arange(N, device=pred_labels.device)[None, :]
             < batch["labeled"]["seq_lens"][:, None]
@@ -63,18 +64,27 @@ class SSLMetaArch(LightningModule):
         )
 
         avg_norm = torch.linalg.norm(a_emb, dim=-1).mean()
-        self.log("train/avg_norm", avg_norm, rank_zero_only=True)
-
-        self.log("train/sigreg_loss", sigreg_loss, rank_zero_only=True)
-        self.log("train/inv_loss", inv_loss, rank_zero_only=True)
+        self.log("train/avg_norm", avg_norm, rank_zero_only=True, batch_size=batch_size)
+        self.log(
+            "train/sigreg_loss", sigreg_loss, rank_zero_only=True, batch_size=batch_size
+        )
+        self.log("train/inv_loss", inv_loss, rank_zero_only=True, batch_size=batch_size)
         self.log(
             "train/lejepa_loss",
             lejepa_loss,
             rank_zero_only=True,
             prog_bar=True,
             on_epoch=True,
+            batch_size=batch_size,
         )
-        self.log("train/probe_loss", probe_loss, rank_zero_only=True, prog_bar=True)
+        self.log(
+            "train/probe_loss",
+            probe_loss,
+            rank_zero_only=True,
+            prog_bar=True,
+            on_epoch=True,
+            batch_size=labeled_batch,
+        )
 
         return lejepa_loss + probe_loss
 
