@@ -107,9 +107,11 @@ class SSLMetaArch(LightningModule):
         no_decay_params = [
             w for n, w in self.model.named_parameters() if w.ndim == 1 or ".rope." in n
         ]
-        decay_params = list(
-            set(self.model.parameters()).difference(no_decay_params)
-        ) + list(self.linear_proj.parameters())
+        decay_params = (
+            list(set(self.model.parameters()).difference(no_decay_params))
+            + list(self.probe.parameters())
+            + list(self.proj.parameters())
+        )
         params = [
             {"params": decay_params},
             {"params": no_decay_params, "weight_decay": 0},
