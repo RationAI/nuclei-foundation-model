@@ -31,7 +31,6 @@ class SSLMetaArch(LightningModule):
     def forward(
         self, x: Tensor, pos: Tensor, block_mask: BlockMask
     ) -> tuple[Tensor, Tensor]:
-        print(x.shape, pos.shape)
         return self.model(x, pos, block_mask)
 
     def forward_unlabeled(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
@@ -54,8 +53,13 @@ class SSLMetaArch(LightningModule):
         sigreg_loss = self.sigreg_loss(a_emb)
         lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
 
-        probe_loss = F.cross_entropy(
-            pred_labels[batch["labeled"]["seq_lens"]], batch["labeled"]["labels"]
+        _, N, _ = pred_labels.shape
+        mask = (
+            torch.arange(N, device=pred_labels.device)[None, :]
+            < batch["labeled"]["seq_lens"][:, None]
+        )
+        probe_loss = F.binary_cross_entropy_with_logits(
+            pred_labels[mask].squeeze(-1), batch["labeled"]["labels"]
         )
 
         avg_norm = torch.linalg.norm(a_emb, dim=-1).mean()
@@ -78,7 +82,9 @@ class SSLMetaArch(LightningModule):
         no_decay_params = [
             w for n, w in self.model.named_parameters() if w.ndim == 1 or ".rope." in n
         ]
-        decay_params = list(set(self.model.parameters()).difference(no_decay_params))
+        decay_params = list(
+            set(self.model.parameters()).difference(no_decay_params)
+        ) + list(self.linear_proj.parameters())
         params = [
             {"params": decay_params},
             {"params": no_decay_params, "weight_decay": 0},
@@ -96,4 +102,6 @@ class SSLMetaArch(LightningModule):
             optimizer, schedulers=[s1, s2], milestones=[self.warmup_steps]
         )
 
-        return [optimizer], [scheduler]
+        return [optimizer], [
+            {"scheduler": scheduler, "interval": "step", "frequency": 1}
+        ]

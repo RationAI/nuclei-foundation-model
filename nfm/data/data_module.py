@@ -19,7 +19,6 @@ def train_collate_fn(
 
     g_knn = [b["global_knn"] for b in batch]
     l_knn = [b["local_knn"] for b in batch]
-    print(g_knn[0].shape, l_knn[0].shape, seq_lens)
     return {
         "global_block_mask": create_batched_block_quantized_knn_mask(
             g_knn, seq_lens, block_size=128
@@ -44,7 +43,7 @@ def inference_collate_fn(
         ),
         "pos": torch.stack([b["pos"] for b in batch]),
         "efds": torch.stack([b["efds"] for b in batch]),
-        "labels": torch.cat([b["labels"] for b in batch]),
+        "labels": torch.cat([b["labels"] for b in batch]).float(),
         "seq_lens": seq_lens,
     }
 
