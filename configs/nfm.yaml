@@ -19,10 +19,6 @@ trainer:
       save_last: true
       monitor: train/lejepa_loss
       mode: min
-    swa:
-      _target_: lightning.pytorch.callbacks.StochasticWeightAveraging
-      swa_lrs: 0.05
-      swa_epoch_start: 10
 
 model:
   warmup_steps: 1000
