@@ -18,6 +18,13 @@ data:
     slides_path: /flash/project_465002057/nuclei/labeled_nuclei/slide_metadata.parquet
     nuclei_path: /flash/project_465002057/nuclei/labeled_nuclei/labels
 
+trainer:
+  strategy:
+    _target_: lightning.pytorch.strategies.DeepSpeedStrategy
+    stage: 2
+    config:
+      train_micro_batch_size_per_gpu: 32
+
 metadata:
   run_name: Training
   description: Training of the model on full data
