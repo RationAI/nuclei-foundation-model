@@ -62,7 +62,7 @@ class SSLMetaArch(LightningModule):
 
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
         with torch.no_grad():
-            embed, _ = self(batch["efds"], batch["pos"], batch["block_mask"])
+            embed = self(batch["efds"], batch["pos"], batch["block_mask"])
 
         return self.probe(embed)
 
