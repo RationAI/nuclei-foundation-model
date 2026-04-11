@@ -21,4 +21,7 @@ export MPICH_GPU_SUPPORT_ENABLED=1
 srun --cpu-bind=${CPU_BIND} singularity exec \
     -B "/flash/project_465002057,/scratch/project_465002057,/projappl/project_465002057" \
     "/project/project_465002057/nfm_0.6.0-rocm.sif" \
-    python3 -m nfm mode=fit +experiment=LUMI +trainer.num_nodes=$SLURM_NNODES +trainer.devices=$SLURM_GPUS_ON_NODE +trainer.strategy=deepspeed_stage_2
+    python3 -m nfm mode=fit +experiment=LUMI +trainer.num_nodes=$SLURM_NNODES +trainer.devices=$SLURM_GPUS_ON_NODE \ 
+        +trainer.strategy._target_=lightning.pytorch.strategies.DeepSpeedStrategy \
+        +trainer.strategy.stage=2 \
+        +trainer.strategy.config.train_micro_batch_size_per_gpu=32
