@@ -2,11 +2,11 @@
 
 data:
   batch_size:
-    train: 16
+    train: 6
     train_labeled: 4
   num_workers:
-    train: 5
-    train_labeled: 1
+    train: 4
+    train_labeled: 2
   block_size: 128
   k: 16
   train:
@@ -24,7 +24,7 @@ trainer:
     _convert_: all
     stage: 2
     config:
-      train_micro_batch_size_per_gpu: 32
+      train_micro_batch_size_per_gpu: ${data.batch_size.train}
 
 metadata:
   run_name: Training
