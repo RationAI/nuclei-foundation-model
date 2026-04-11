@@ -3,10 +3,10 @@
 data:
   batch_size:
     train: 32
-    train_labeled: 16
+    train_labeled: 8
   num_workers:
-    train: 4
-    train_labeled: 2
+    train: 5
+    train_labeled: 1
   block_size: 128
   k: 16
   train:
