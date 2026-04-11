@@ -48,8 +48,9 @@ class SSLMetaArch(LightningModule):
         g_embed = self(batch["efds"], batch["pos"], batch["global_block_mask"])
         l_embed = self(batch["efds"], batch["pos"], batch["local_block_mask"])
 
-        g_chunks = torch.split(g_embed, batch["seq_lens"])
-        l_chunks = torch.split(l_embed, batch["seq_lens"])
+        lens_list = batch["seq_lens"].tolist()
+        g_chunks = torch.split(g_embed, lens_list)
+        l_chunks = torch.split(l_embed, lens_list)
 
         g_mean = torch.stack([chunk.mean(dim=0) for chunk in g_chunks])
         l_mean = torch.stack([chunk.mean(dim=0) for chunk in l_chunks])
