@@ -48,9 +48,8 @@ class SSLMetaArch(LightningModule):
         g_embed = self(batch["efds"], batch["pos"], batch["global_block_mask"])
         l_embed = self(batch["efds"], batch["pos"], batch["local_block_mask"])
 
-        lens_list = batch["seq_lens"].tolist()
-        g_chunks = torch.split(g_embed, lens_list)
-        l_chunks = torch.split(l_embed, lens_list)
+        g_chunks = torch.split(g_embed, batch["g_seq_lens"].tolist())
+        l_chunks = torch.split(l_embed, batch["l_seq_lens"].tolist())
 
         g_mean = torch.stack([chunk.mean(dim=0) for chunk in g_chunks])
         l_mean = torch.stack([chunk.mean(dim=0) for chunk in l_chunks])
@@ -67,7 +66,7 @@ class SSLMetaArch(LightningModule):
         return self.probe(embed)
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
-        batch_size = len(batch["unlabeled"]["seq_lens"])
+        batch_size = len(batch["unlabeled"]["g_seq_lens"])
         g_emb, l_emb, a_emb = self.forward_unlabeled(batch["unlabeled"])
 
         inv_loss = (l_emb - g_emb).square().mean()
