@@ -44,7 +44,7 @@ class SSLMetaArch(LightningModule):
     ) -> tuple[Tensor, Tensor]:
         return self.model(x, pos, block_mask)
 
-    def forward_unlabeled(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
+    def forward_unlabeled(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor]:
         g_embed = self(batch["efds"], batch["pos"], batch["global_block_mask"])
         l_embed = self(batch["efds"], batch["pos"], batch["local_block_mask"])
 
@@ -58,7 +58,7 @@ class SSLMetaArch(LightningModule):
         global_proj = self.proj(g_mean)
         local_proj = self.proj(l_mean)
 
-        return global_proj, torch.stack([global_proj, local_proj], dim=1)
+        return global_proj, local_proj, torch.stack([global_proj, local_proj], dim=1)
 
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
         with torch.no_grad():
@@ -68,9 +68,9 @@ class SSLMetaArch(LightningModule):
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         batch_size = len(batch["unlabeled"]["seq_lens"])
-        g_emb, a_emb = self.forward_unlabeled(batch["unlabeled"])
+        g_emb, l_emb, a_emb = self.forward_unlabeled(batch["unlabeled"])
 
-        inv_loss = (a_emb - g_emb[:, None]).square().mean()
+        inv_loss = (l_emb - g_emb).square().mean()
         sigreg_loss = self.sigreg_loss(a_emb)
         lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
 
