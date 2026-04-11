@@ -21,6 +21,7 @@ data:
 trainer:
   strategy:
     _target_: lightning.pytorch.strategies.DeepSpeedStrategy
+    _convert_: all
     stage: 2
     config:
       train_micro_batch_size_per_gpu: 32
