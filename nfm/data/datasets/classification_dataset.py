@@ -40,14 +40,11 @@ class ClassificationNucleiDataset(NucleiDataset):
         labels = labels[indices][sort_indices]
 
         _, knn = self.nbrs.fit(centroids).kneighbors(centroids)
-        pad_len = self.global_crop_k - len(centroids)
 
         return {
-            "pos": torch.from_numpy(np.pad(centroids, ((0, pad_len), (0, 0)))),
-            "efds": torch.from_numpy(np.pad(efds, ((0, pad_len), (0, 0)))),
-            "knn": torch.from_numpy(
-                np.pad(knn, ((0, pad_len), (0, 0)), constant_values=-1)
-            ),
-            "labels": torch.from_numpy(labels > 0.5),
+            "pos": torch.from_numpy(centroids),
+            "efds": torch.from_numpy(efds),
+            "knn": torch.from_numpy(knn),
+            "labels": torch.from_numpy(labels > 0.5)[:, None],
             "seq_len": len(centroids),
         }

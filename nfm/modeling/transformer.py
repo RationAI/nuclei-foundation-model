@@ -25,7 +25,7 @@ class SelfAttention(nn.Module):
 
     def forward(self, x: Tensor, pos: Tensor, block_mask: BlockMask) -> Tensor:
         q, k, v = rearrange(
-            self.qkv(x), "b n (three h d) -> three b h n d", three=3, d=self.head_dim
+            self.qkv(x), "n (three h d) -> three 1 h n d", three=3, d=self.head_dim
         )
         q = self.q_norm(q)
         k = self.k_norm(k)
@@ -36,7 +36,7 @@ class SelfAttention(nn.Module):
             value=v,
             block_mask=block_mask,
         )
-        x = rearrange(x, "b h n d -> b n (h d)")
+        x = rearrange(x, "b h n d -> n (h d)")
 
         return self.wo(x)
 
@@ -45,7 +45,7 @@ class Layer(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
 
-        self.self_attn = SelfAttention(
+        self.attn = SelfAttention(
             dim=config.dim, num_heads=config.num_heads, rope_theta=config.rope_theta
         )
         self.ffn = FeedForward(config.dim, config.hidden_dim)
@@ -55,7 +55,7 @@ class Layer(nn.Module):
 
     def forward(self, x: Tensor, pos: Tensor, block_mask: BlockMask) -> Tensor:
         y = self.pre_attn_norm(x)
-        x = x + self.self_attn(y, pos, block_mask)
+        x = x + self.attn(y, pos, block_mask)
 
         y = self.pre_ffn_norm(x)
         return x + self.ffn(y)
@@ -104,11 +104,11 @@ class NFM(nn.Module):
         """Forward pass of the Transformer model.
 
         Args:
-            x: Target sequence of shape (b, n, d)
-            pos: Target positions of shape (b, n, 2)
+            x: Target sequence of shape (n, d)
+            pos: Target positions of shape (n, 2)
             block_mask: Block mask for attention
         """
-        x = self.bn(x.flatten(0, 1)).view_as(x)
+        x = self.bn(x)
         x = self.polygon_proj(x)
 
         embed = self.backbone(x, pos, block_mask)

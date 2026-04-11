@@ -170,16 +170,11 @@ class NucleiDataset(Dataset[Sample]):
         efds = efds[sort_indices]
 
         _, knn = self.nbrs.fit(centroids).kneighbors(centroids)
-        pad_len = self.global_crop_k - len(centroids)
 
         return {
-            "pos": torch.from_numpy(np.pad(centroids, ((0, pad_len), (0, 0)))),
-            "efds": torch.from_numpy(np.pad(efds, ((0, pad_len), (0, 0)))),
-            "global_knn": torch.from_numpy(
-                np.pad(knn, ((0, pad_len), (0, 0)), constant_values=-1)
-            ),
-            "local_knn": torch.from_numpy(
-                np.pad(knn[:, :1], ((0, pad_len), (0, 0)), constant_values=-1)
-            ),
+            "pos": torch.from_numpy(centroids),
+            "efds": torch.from_numpy(efds),
+            "global_knn": torch.from_numpy(knn),
+            "local_knn": torch.from_numpy(knn[:, :1]),
             "seq_len": len(centroids),
         }

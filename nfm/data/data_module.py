@@ -9,42 +9,37 @@ from torch import Tensor
 from torch.nn.attention.flex_attention import BlockMask
 from torch.utils.data import DataLoader
 
-from nfm.modeling.block_mask import create_batched_block_quantized_knn_mask
+from nfm.modeling.block_mask import create_ragged_block_quantized_knn_mask
 
 
 def train_collate_fn(
     batch: list[dict[str, Tensor]],
 ) -> dict[str, Tensor | BlockMask]:
-    seq_lens = torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32)
-
     g_knn = [b["global_knn"] for b in batch]
     l_knn = [b["local_knn"] for b in batch]
     return {
-        "global_block_mask": create_batched_block_quantized_knn_mask(
-            g_knn, seq_lens, block_size=128
+        "global_block_mask": create_ragged_block_quantized_knn_mask(
+            g_knn, block_size=128
         ),
-        "local_block_mask": create_batched_block_quantized_knn_mask(
-            l_knn, seq_lens, block_size=128
+        "local_block_mask": create_ragged_block_quantized_knn_mask(
+            l_knn, block_size=128
         ),
-        "pos": torch.stack([b["pos"] for b in batch]),
-        "efds": torch.stack([b["efds"] for b in batch]),
-        "seq_lens": seq_lens,
+        "pos": torch.cat([b["pos"] for b in batch]),
+        "efds": torch.cat([b["efds"] for b in batch]),
+        "seq_lens": torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32),
     }
 
 
 def inference_collate_fn(
     batch: list[dict[str, Tensor]],
 ) -> dict[str, Tensor | BlockMask]:
-    seq_lens = torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32)
     knn = [b["knn"] for b in batch]
     return {
-        "block_mask": create_batched_block_quantized_knn_mask(
-            knn, seq_lens, block_size=128
-        ),
-        "pos": torch.stack([b["pos"] for b in batch]),
-        "efds": torch.stack([b["efds"] for b in batch]),
+        "block_mask": create_ragged_block_quantized_knn_mask(knn, block_size=128),
+        "pos": torch.cat([b["pos"] for b in batch]),
+        "efds": torch.cat([b["efds"] for b in batch]),
         "labels": torch.cat([b["labels"] for b in batch]).float(),
-        "seq_lens": seq_lens,
+        "seq_lens": torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32),
     }
 
 

@@ -45,7 +45,7 @@ class SSLMetaArch(LightningModule):
         return self.linear_proj(embed)
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
-        batch_size = batch["unlabeled"]["efds"].shape[0]
+        batch_size = len(batch["unlabeled"]["seq_lens"])
         g_emb, a_emb = self.forward_unlabeled(batch["unlabeled"])
         pred_labels = self.forward_labeled(batch["labeled"])
 
@@ -54,13 +54,8 @@ class SSLMetaArch(LightningModule):
         sigreg_loss = self.sigreg_loss(a_emb)
         lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
 
-        labeled_batch, N, _ = pred_labels.shape
-        mask = (
-            torch.arange(N, device=pred_labels.device)[None, :]
-            < batch["labeled"]["seq_lens"][:, None]
-        )
         probe_loss = F.binary_cross_entropy_with_logits(
-            pred_labels[mask].squeeze(-1), batch["labeled"]["labels"]
+            pred_labels, batch["labeled"]["labels"]
         )
 
         avg_norm = torch.linalg.norm(a_emb, dim=-1).mean()
@@ -83,7 +78,7 @@ class SSLMetaArch(LightningModule):
             rank_zero_only=True,
             prog_bar=True,
             on_epoch=True,
-            batch_size=labeled_batch,
+            batch_size=len(batch["labeled"]["seq_lens"]),
         )
 
         return lejepa_loss + probe_loss
