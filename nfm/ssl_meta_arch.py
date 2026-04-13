@@ -11,7 +11,6 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torchvision.ops import MLP
 
 from nfm.configuration import Config
-from nfm.modeling.layers import RoPE
 from nfm.modeling.transformer import NFM
 
 
@@ -42,19 +41,6 @@ class SSLMetaArch(LightningModule):
 
     def configure_model(self) -> None:
         self = nn.SyncBatchNorm.convert_sync_batchnorm(self)
-
-        for module in self.model.modules():
-            if isinstance(
-                module,
-                (
-                    RoPE,
-                    nn.BatchNorm1d,
-                    nn.BatchNorm2d,
-                    nn.BatchNorm3d,
-                    nn.SyncBatchNorm,
-                ),
-            ):
-                module.to(torch.float32)
 
     def forward(
         self, x: Tensor, pos: Tensor, block_mask: BlockMask
