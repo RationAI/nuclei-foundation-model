@@ -23,7 +23,8 @@ trainer:
     _target_: lightning.pytorch.strategies.FSDPStrategy
     sharding_strategy: SHARD_GRAD_OP
     auto_wrap_policy:
-      - _target_: nfm.modeling.layers.RoPE
+      - _target_: hydra.utils.get_class
+        path: nfm.modeling.layers.RoPE
 
 metadata:
   run_name: Training
