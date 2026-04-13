@@ -39,9 +39,6 @@ class SSLMetaArch(LightningModule):
             univariate_test=univariate_test, num_slices=1024
         )
 
-    def configure_model(self) -> None:
-        self = nn.SyncBatchNorm.convert_sync_batchnorm(self)
-
     def forward(
         self, x: Tensor, pos: Tensor, block_mask: BlockMask
     ) -> tuple[Tensor, Tensor]:

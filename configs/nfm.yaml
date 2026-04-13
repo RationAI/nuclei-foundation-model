@@ -11,7 +11,6 @@ trainer:
   sync_batchnorm: true
   log_every_n_steps: 10
   precision: bf16-mixed
-  gradient_clip_val: 0.1
   callbacks:
     model_checkpoint:
       _target_: lightning.pytorch.callbacks.ModelCheckpoint
