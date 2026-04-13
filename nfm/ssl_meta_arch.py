@@ -41,11 +41,20 @@ class SSLMetaArch(LightningModule):
         )
 
     def configure_model(self) -> None:
-        for module in self.model.modules():
-            if isinstance(module, RoPE):
-                module.to(torch.float32)
-
         self = nn.SyncBatchNorm.convert_sync_batchnorm(self)
+
+        for module in self.model.modules():
+            if isinstance(
+                module,
+                (
+                    RoPE,
+                    nn.BatchNorm1d,
+                    nn.BatchNorm2d,
+                    nn.BatchNorm3d,
+                    nn.SyncBatchNorm,
+                ),
+            ):
+                module.to(torch.float32)
 
     def forward(
         self, x: Tensor, pos: Tensor, block_mask: BlockMask

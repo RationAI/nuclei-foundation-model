@@ -18,14 +18,6 @@ data:
     slides_path: /flash/project_465002057/nuclei/labeled_nuclei/slide_metadata.parquet
     nuclei_path: /flash/project_465002057/nuclei/labeled_nuclei/labels
 
-trainer:
-  strategy:
-    _target_: lightning.pytorch.strategies.FSDPStrategy
-    sharding_strategy: SHARD_GRAD_OP
-    auto_wrap_policy:
-      - _target_: hydra.utils.get_class
-        path: nfm.modeling.layers.RoPE
-
 metadata:
   run_name: Training
   description: Training of the model on full data
