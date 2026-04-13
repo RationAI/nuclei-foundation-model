@@ -27,25 +27,6 @@ def train_collate_fn(
     all_efds = []
     all_g_knns = []
     all_l_knns = []
-    l_seq_lens = []
-
-    def _local_block_lengths(global_offset: int, seq_len: int) -> list[int]:
-        remaining = seq_len
-        block_lengths = []
-
-        offset_in_block = global_offset % block_size
-        first_block_len = min(block_size - offset_in_block, remaining)
-        block_lengths.append(first_block_len)
-        remaining -= first_block_len
-
-        while remaining >= block_size:
-            block_lengths.append(block_size)
-            remaining -= block_size
-
-        if remaining > 0:
-            block_lengths.append(remaining)
-
-        return block_lengths
 
     current_global_idx = 0
     for b in batch:
@@ -59,7 +40,6 @@ def train_collate_fn(
         all_g_knns.append(torch.from_numpy(knn))
         all_l_knns.append(torch.from_numpy(knn[:, :1]))
         all_efds.append(b["efds"][sort_indices])
-        l_seq_lens.extend(_local_block_lengths(current_global_idx, len(sorted_pos)))
         current_global_idx += len(sorted_pos)
 
     return {
@@ -72,7 +52,6 @@ def train_collate_fn(
         "pos": torch.cat(all_pos),
         "efds": torch.cat(all_efds),
         "g_seq_lens": torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32),
-        "l_seq_lens": torch.tensor(l_seq_lens, dtype=torch.int32),
     }
 
 

@@ -20,11 +20,10 @@ data:
 
 trainer:
   strategy:
-    _target_: lightning.pytorch.strategies.DeepSpeedStrategy
-    _convert_: all
-    stage: 2
-    config:
-      train_micro_batch_size_per_gpu: ${data.batch_size.train}
+    _target_: lightning.pytorch.strategies.FSDPStrategy
+    sharding_strategy: SHARD_GRAD_OP
+    auto_wrap_policy:
+      - _target_: nfm.modeling.layers.RoPE
 
 metadata:
   run_name: Training

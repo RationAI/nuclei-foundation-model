@@ -11,6 +11,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torchvision.ops import MLP
 
 from nfm.configuration import Config
+from nfm.modeling.layers import RoPE
 from nfm.modeling.transformer import NFM
 
 
@@ -39,25 +40,26 @@ class SSLMetaArch(LightningModule):
             univariate_test=univariate_test, num_slices=1024
         )
 
+    def configure_model(self) -> None:
+        for module in self.model.modules():
+            if isinstance(module, RoPE):
+                module.to(torch.float32)
+
+        self = nn.SyncBatchNorm.convert_sync_batchnorm(self)
+
     def forward(
         self, x: Tensor, pos: Tensor, block_mask: BlockMask
     ) -> tuple[Tensor, Tensor]:
         return self.model(x, pos, block_mask)
 
-    def forward_unlabeled(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor]:
+    def forward_unlabeled(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
         g_embed = self(batch["efds"], batch["pos"], batch["global_block_mask"])
         l_embed = self(batch["efds"], batch["pos"], batch["local_block_mask"])
 
-        g_chunks = torch.split(g_embed, batch["g_seq_lens"].tolist())
-        l_chunks = torch.split(l_embed, batch["l_seq_lens"].tolist())
+        g_proj = self.proj(g_embed)
+        l_proj = self.proj(l_embed)
 
-        g_mean = torch.stack([chunk.mean(dim=0) for chunk in g_chunks])
-        l_mean = torch.stack([chunk.mean(dim=0) for chunk in l_chunks])
-
-        global_proj = self.proj(g_mean)
-        local_proj = self.proj(l_mean)
-
-        return global_proj, local_proj, torch.stack([global_proj, local_proj], dim=1)
+        return g_proj, l_proj
 
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
         with torch.no_grad():
@@ -67,10 +69,10 @@ class SSLMetaArch(LightningModule):
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         batch_size = len(batch["unlabeled"]["g_seq_lens"])
-        g_emb, l_emb, a_emb = self.forward_unlabeled(batch["unlabeled"])
+        g_emb, l_emb = self.forward_unlabeled(batch["unlabeled"])
 
-        inv_loss = (l_emb - g_emb).square().mean()
-        sigreg_loss = self.sigreg_loss(a_emb)
+        inv_loss = F.mse_loss(l_emb, g_emb)
+        sigreg_loss = (self.sigreg_loss(g_emb) + self.sigreg_loss(l_emb)) / 2
         lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
 
         probe_labels = self.forward_labeled(batch["labeled"])
@@ -78,7 +80,7 @@ class SSLMetaArch(LightningModule):
             probe_labels, batch["labeled"]["labels"]
         )
 
-        avg_norm = torch.linalg.norm(a_emb, dim=-1).mean()
+        avg_norm = torch.linalg.norm(g_emb, dim=-1).mean()
         self.log("train/avg_norm", avg_norm, rank_zero_only=True, batch_size=batch_size)
         self.log(
             "train/sigreg_loss", sigreg_loss, rank_zero_only=True, batch_size=batch_size

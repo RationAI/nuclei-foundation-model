@@ -29,7 +29,6 @@ class RoPE(nn.Module):
             nn.Linear(dim, dim, bias=False), orthogonal_map="householder"
         )
 
-    @torch.autocast("cuda", dtype=torch.float32)
     def forward(self, x: Tensor, positions: Tensor) -> Tensor:
         """Apply RoPE positional encoding.
 
