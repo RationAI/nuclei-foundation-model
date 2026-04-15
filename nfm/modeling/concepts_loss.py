@@ -142,11 +142,11 @@ class SpatialConceptLoss(nn.Module):
         mu = concepts.mean(dim=0, keepdim=True)
         v_centered = concepts - mu
 
-        # SpMM magically computes the sum of neighbors for each nucleus
-        neighbor_sum_centered = torch.sparse.mm(A, v_centered)  # Shape: (N, C)
+        # THE FIX: Upcast -> SpMM -> Downcast
+        v_centered_f32 = v_centered.to(torch.float32)
+        neighbor_sum_centered = torch.sparse.mm(A, v_centered_f32).to(concepts.dtype)
 
-        # Covariance is just the dot product of the node and its neighbors' sum
-        covariance = (v_centered * neighbor_sum_centered).sum(dim=0)  # Shape: (C,)
+        covariance = (v_centered * neighbor_sum_centered).sum(dim=0)
         variance = (v_centered**2).sum(dim=0).clamp(min=1e-4)
 
         W = N * k
@@ -154,13 +154,13 @@ class SpatialConceptLoss(nn.Module):
         dispersion_loss = morans_i**2
 
         # --- 2. Clustering Loss (L2 / Dirichlet Energy) ---
-        # Using the mathematical identity: sum((vi - vj)^2) = 2*k*sum(vi^2) - 2*sum(vi*vj)
-        neighbor_sum_raw = torch.sparse.mm(A, concepts)
+        # THE FIX: Upcast -> SpMM -> Downcast
+        concepts_f32 = concepts.to(torch.float32)
+        neighbor_sum_raw = torch.sparse.mm(A, concepts_f32).to(concepts.dtype)
 
         sum_vi_vj = (concepts * neighbor_sum_raw).sum(dim=0)
         sum_vi_sq = (concepts**2).sum(dim=0)
 
-        # Average L2 distance to neighbors per concept
         cluster_loss_l2 = (2 * k * sum_vi_sq - 2 * sum_vi_vj) / (N * k)
 
         # --- 3. Routing ---

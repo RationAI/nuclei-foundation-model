@@ -10,7 +10,7 @@ from nfm.ssl_meta_arch import SSLMetaArch
 
 @hydra.main(config_path="../configs", config_name="nfm", version_base=None)
 def main(config: DictConfig) -> None:
-    torch.set_float32_matmul_precision("medium")
+    torch.set_float32_matmul_precision("high")
     seed_everything(config.seed, workers=True)
 
     data = hydra.utils.instantiate(
@@ -18,7 +18,7 @@ def main(config: DictConfig) -> None:
         _recursive_=False,  # to avoid instantiating all the datasets
         _target_=DataModule,
     )
-    model = torch.compile(hydra.utils.instantiate(config.model, _target_=SSLMetaArch))
+    model = hydra.utils.instantiate(config.model, _target_=SSLMetaArch)
 
     logger = hydra.utils.instantiate(config.logger)
     trainer = hydra.utils.instantiate(config.trainer, _target_=Trainer, logger=logger)
