@@ -88,16 +88,6 @@ class NFM(nn.Module):
         self.backbone = Transformer(config)
         self.polygon_proj = nn.Linear(4 * config.efd_order, config.dim)
 
-        self.proj = MLP(
-            config.dim,
-            hidden_channels=[
-                config.proj_hidden_dim,
-                config.proj_hidden_dim,
-                config.proj_dim,
-            ],
-            norm_layer=nn.BatchNorm1d,
-        )
-
     def forward(
         self, x: Tensor, pos: Tensor, block_mask: BlockMask
     ) -> tuple[Tensor, Tensor]:
