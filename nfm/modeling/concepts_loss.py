@@ -117,13 +117,11 @@ class SpatialConceptLoss(nn.Module):
         self.routing_logits = nn.Parameter(torch.randn(num_concepts, 2))
 
     def forward(self, embed: torch.Tensor, knn_indices: torch.Tensor):
-        """
+        """.
+
         Args:
-            concepts: (N, C) tensor of SAE activations.
+            embed: (N, d) tensor of embeddings.
             knn_indices: (N, k) tensor of integer neighbor indices.
-        Returns:
-            total_spatial_loss: Scalar tensor representing the batch spatial loss.
-            routing_weights: (C, 2) tensor showing what the model learned for each concept.
         """
         x_reconstructed, concepts, pre_activations = self.sae(embed)
         sae_loss = self.sae.compute_loss(
