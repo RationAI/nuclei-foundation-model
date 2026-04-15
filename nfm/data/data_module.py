@@ -27,6 +27,7 @@ def train_collate_fn(
     all_efds = []
     all_g_knns = []
     all_l_knns = []
+    all_knns = []
 
     current_global_idx = 0
     for b in batch:
@@ -40,6 +41,7 @@ def train_collate_fn(
         all_g_knns.append(torch.from_numpy(knn))
         all_l_knns.append(torch.from_numpy(knn[:, :1]))
         all_efds.append(b["efds"][sort_indices])
+        all_knns.append(torch.from_numpy(knn[:, 1:]) + current_global_idx)
         current_global_idx += len(sorted_pos)
 
     return {
@@ -52,6 +54,7 @@ def train_collate_fn(
         "pos": torch.cat(all_pos),
         "efds": torch.cat(all_efds),
         "g_seq_lens": torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32),
+        "all_knns": torch.stack(all_knns),
     }
 
 
