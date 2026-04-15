@@ -111,18 +111,10 @@ class SAE(nn.Module):
 class SpatialConceptLoss(nn.Module):
     def __init__(self, dim: int, num_concepts: int):
         super().__init__()
-        # Learnable routing logits for each concept.
-        # Dim 0: Clustering propensity, Dim 1: Dispersion propensity
-        self.sae = SAE(dim, num_concepts)  # Example dimensions
+        self.sae = SAE(dim, num_concepts)
         self.routing_logits = nn.Parameter(torch.randn(num_concepts, 2))
 
     def forward(self, embed: torch.Tensor, knn_indices: torch.Tensor):
-        """.
-
-        Args:
-            embed: (N, d) tensor of embeddings.
-            knn_indices: (N, k) tensor of integer neighbor indices.
-        """
         x_reconstructed, concepts, pre_activations = self.sae(embed)
         sae_loss = self.sae.compute_loss(
             embed, x_reconstructed, concepts, pre_activations, sparsity_coefficient=0.1
@@ -130,50 +122,56 @@ class SpatialConceptLoss(nn.Module):
 
         N, C = concepts.shape
         k = knn_indices.shape[1]
+        device = concepts.device
 
-        # 1. Routing Probabilities (Forces w_cluster + w_disperse = 1 per concept)
-        routing_weights = F.softmax(self.routing_logits, dim=-1)  # (C, 2)
+        # ---------------------------------------------------------
+        # THE SPEED FIX: Build a Sparse Adjacency Matrix
+        # This replaces the 2GB (N, k, C) dense broadcasting tensors
+        # ---------------------------------------------------------
+        row = torch.arange(N, device=device).unsqueeze(1).expand(N, k).reshape(-1)
+        col = knn_indices.reshape(-1)
+
+        indices = torch.stack([row, col], dim=0)
+        values = torch.ones(N * k, device=device)
+
+        # A is an (N, N) sparse matrix.
+        # A @ X efficiently sums the features of all neighbors for every node.
+        A = torch.sparse_coo_tensor(indices, values, (N, N)).coalesce()
+
+        # --- 1. Dispersion Loss (Moran's I) ---
+        mu = concepts.mean(dim=0, keepdim=True)
+        v_centered = concepts - mu
+
+        # SpMM magically computes the sum of neighbors for each nucleus
+        neighbor_sum_centered = torch.sparse.mm(A, v_centered)  # Shape: (N, C)
+
+        # Covariance is just the dot product of the node and its neighbors' sum
+        covariance = (v_centered * neighbor_sum_centered).sum(dim=0)  # Shape: (C,)
+        variance = (v_centered**2).sum(dim=0).clamp(min=1e-4)
+
+        W = N * k
+        morans_i = (N / W) * (covariance / variance)
+        dispersion_loss = morans_i**2
+
+        # --- 2. Clustering Loss (L2 / Dirichlet Energy) ---
+        # Using the mathematical identity: sum((vi - vj)^2) = 2*k*sum(vi^2) - 2*sum(vi*vj)
+        neighbor_sum_raw = torch.sparse.mm(A, concepts)
+
+        sum_vi_vj = (concepts * neighbor_sum_raw).sum(dim=0)
+        sum_vi_sq = (concepts**2).sum(dim=0)
+
+        # Average L2 distance to neighbors per concept
+        cluster_loss_l2 = (2 * k * sum_vi_sq - 2 * sum_vi_vj) / (N * k)
+
+        # --- 3. Routing ---
+        routing_weights = F.softmax(self.routing_logits, dim=-1)
         w_cluster = routing_weights[:, 0]
         w_disperse = routing_weights[:, 1]
 
-        # 2. Gather Neighbors
-        # concepts[knn_indices] creates a tensor of shape (N, k, C)
-        v_neighbors = concepts[knn_indices]
-
-        # 3. Clustering Loss (L1 penalty on local differences)
-        # Expand concepts to (N, 1, C) to broadcast subtraction against (N, k, C)
-        v_expanded = concepts.unsqueeze(1)
-        # Average L1 distance to neighbors per concept -> shape (C,)
-        cluster_loss = torch.abs(v_expanded - v_neighbors).mean(dim=(0, 1))
-
-        # 4. Dispersion Loss (Moran's I)
-        # Center the concepts to calculate variance/covariance
-        mu = concepts.mean(dim=0, keepdim=True)  # (1, C)
-        v_centered = concepts - mu  # (N, C)
-        v_c_expanded = v_centered.unsqueeze(1)  # (N, 1, C)
-        v_c_neighbors = v_centered[knn_indices]  # (N, k, C)
-
-        # Numerator: Sum of spatial covariance
-        covariance = (v_c_expanded * v_c_neighbors).sum(dim=(0, 1))  # (C,)
-
-        # Denominator: Total variance
-        variance = (v_centered**2).sum(dim=0).clamp(min=1e-4)  # (C,)
-
-        # Moran's I calculation (W = N * k for an unweighted kNN graph)
-        W = N * k
-        morans_i = (N / W) * (
-            covariance / (variance + 1e-8)
-        )  # Added eps to prevent NaN
-
-        # We penalize the squared Moran's I to drive it toward 0 (spatial randomness)
-        dispersion_loss = morans_i**2  # (C,)
-
-        # 5. Combine using the learned routing weights
-        concept_spatial_loss = (w_cluster * cluster_loss) + (
+        concept_spatial_loss = (w_cluster * cluster_loss_l2) + (
             w_disperse * dispersion_loss
         )
 
-        # Return the mean loss across all concepts, and the learned weights for analysis
         return {
             "spatial_loss": concept_spatial_loss.mean(),
             "routing": w_cluster.mean(),

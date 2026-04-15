@@ -72,16 +72,14 @@ class SSLMetaArch(LightningModule):
 
         probe_labels = self.probe(embed)
 
-        probe_loss = F.binary_cross_entropy_with_logits(
-            probe_labels, batch["labeled"]["labels"]
-        )
+        probe_loss = F.binary_cross_entropy_with_logits(probe_labels, batch["labels"])
         self.log(
             "train/probe_loss",
             probe_loss,
             rank_zero_only=True,
             prog_bar=True,
             on_epoch=True,
-            batch_size=len(batch["labeled"]["seq_lens"]),
+            batch_size=len(batch["seq_lens"]),
         )
         return probe_loss
 

@@ -18,7 +18,7 @@ def main(config: DictConfig) -> None:
         _recursive_=False,  # to avoid instantiating all the datasets
         _target_=DataModule,
     )
-    model = hydra.utils.instantiate(config.model, _target_=SSLMetaArch)
+    model = torch.compile(hydra.utils.instantiate(config.model, _target_=SSLMetaArch))
 
     logger = hydra.utils.instantiate(config.logger)
     trainer = hydra.utils.instantiate(config.trainer, _target_=Trainer, logger=logger)
