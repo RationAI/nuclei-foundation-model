@@ -136,7 +136,9 @@ class SpatialConceptLoss(nn.Module):
 
         # A is an (N, N) sparse matrix.
         # A @ X efficiently sums the features of all neighbors for every node.
-        A = torch.sparse_coo_tensor(indices, values, (N, N)).coalesce()
+        A = torch.sparse_coo_tensor(
+            indices, values, (N, N), dtype=torch.float32
+        ).coalesce()
 
         # --- 1. Dispersion Loss (Moran's I) ---
         mu = concepts.mean(dim=0, keepdim=True)
