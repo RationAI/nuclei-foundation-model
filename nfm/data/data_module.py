@@ -54,7 +54,7 @@ def train_collate_fn(
         "pos": torch.cat(all_pos),
         "efds": torch.cat(all_efds),
         "g_seq_lens": torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32),
-        "all_knns": torch.stack(all_knns),
+        "knn_indices": torch.stack(all_knns),
     }
 
 
