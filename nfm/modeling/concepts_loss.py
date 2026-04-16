@@ -6,7 +6,7 @@ from torch import Tensor, nn
 
 
 class SAE(nn.Module):
-    def __init__(self, dim: int, num_features: int, k: int = 32):
+    def __init__(self, dim: int, num_features: int, k: int = 12):
         """
         Args:
             dim: Dimension of the input embeddings.
@@ -53,21 +53,13 @@ class SAE(nn.Module):
         return x_reconstructed, features
 
     def compute_loss(self, x: Tensor, x_reconstructed: Tensor) -> Tensor:
-        """
-        TopK requires no sparsity penalty. The sparsity is strictly enforced
-        by the forward pass. We only minimize reconstruction error.
-        """
-        reconstruction_error = x - x_reconstructed
-        mse_loss = torch.mean(reconstruction_error**2, dim=-1)
-
-        return mse_loss.mean()
+        return F.mse_loss(x, x_reconstructed)
 
 
 class SpatialConceptLoss(nn.Module):
     def __init__(self, dim: int, num_concepts: int):
         super().__init__()
         self.sae = SAE(dim, num_concepts)
-        self.routing_logits = nn.Parameter(torch.randn(num_concepts, 2))
 
     def forward(self, embed: torch.Tensor, knn_indices: torch.Tensor):
         x_reconstructed, concepts = self.sae(embed)
@@ -93,24 +85,6 @@ class SpatialConceptLoss(nn.Module):
             indices, values, (N, N), dtype=torch.float32
         ).coalesce()
 
-        # --- 1. Dispersion Loss (Moran's I) ---
-        mu = concepts.mean(dim=0, keepdim=True)
-        v_centered = concepts - mu
-
-        # THE FIX: Upcast -> SpMM -> Downcast
-        with torch.autocast(device_type=device.type, enabled=False):
-            v_centered_f32 = v_centered.to(torch.float32)
-            neighbor_sum_centered = torch.sparse.mm(A, v_centered_f32).to(
-                concepts.dtype
-            )
-
-        covariance = (v_centered * neighbor_sum_centered).sum(dim=0)
-        variance = (v_centered**2).sum(dim=0).clamp(min=1e-4)
-
-        W = N * k
-        morans_i = (N / W) * (covariance / variance)
-        dispersion_loss = morans_i**2
-
         # --- 2. Clustering Loss (L2 / Dirichlet Energy) ---
         # THE FIX: Upcast -> SpMM -> Downcast
         with torch.autocast(device_type=device.type, enabled=False):
@@ -122,17 +96,7 @@ class SpatialConceptLoss(nn.Module):
 
         cluster_loss_l2 = (2 * k * sum_vi_sq - 2 * sum_vi_vj) / (N * k)
 
-        # --- 3. Routing ---
-        routing_weights = F.softmax(self.routing_logits, dim=-1)
-        w_cluster = routing_weights[:, 0]
-        w_disperse = routing_weights[:, 1]
-
-        concept_spatial_loss = (w_cluster * cluster_loss_l2) + (
-            w_disperse * dispersion_loss
-        )
-
         return {
-            "spatial_loss": concept_spatial_loss.mean(),
-            "routing": w_cluster.mean(),
+            "spatial_loss": cluster_loss_l2.mean(),
             "sae_loss": sae_loss,
         }
