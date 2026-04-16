@@ -145,8 +145,11 @@ class SpatialConceptLoss(nn.Module):
         v_centered = concepts - mu
 
         # THE FIX: Upcast -> SpMM -> Downcast
-        v_centered_f32 = v_centered.to(torch.float32)
-        neighbor_sum_centered = torch.sparse.mm(A, v_centered_f32).to(concepts.dtype)
+        with torch.autocast(device_type=device.type, enabled=False):
+            v_centered_f32 = v_centered.to(torch.float32)
+            neighbor_sum_centered = torch.sparse.mm(A, v_centered_f32).to(
+                concepts.dtype
+            )
 
         covariance = (v_centered * neighbor_sum_centered).sum(dim=0)
         variance = (v_centered**2).sum(dim=0).clamp(min=1e-4)
@@ -157,8 +160,9 @@ class SpatialConceptLoss(nn.Module):
 
         # --- 2. Clustering Loss (L2 / Dirichlet Energy) ---
         # THE FIX: Upcast -> SpMM -> Downcast
-        concepts_f32 = concepts.to(torch.float32)
-        neighbor_sum_raw = torch.sparse.mm(A, concepts_f32).to(concepts.dtype)
+        with torch.autocast(device_type=device.type, enabled=False):
+            concepts_f32 = concepts.to(torch.float32)
+            neighbor_sum_raw = torch.sparse.mm(A, concepts_f32).to(concepts.dtype)
 
         sum_vi_vj = (concepts * neighbor_sum_raw).sum(dim=0)
         sum_vi_sq = (concepts**2).sum(dim=0)

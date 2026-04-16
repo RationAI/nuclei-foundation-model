@@ -22,4 +22,4 @@ trainer:
 model:
   warmup_steps: 1000
   lamb: 0.1
-  n_concepts: 1024
+  n_concepts: 256
