@@ -53,7 +53,11 @@ class SSLMetaArch(LightningModule):
         avg_norm = torch.linalg.norm(g_embed, dim=-1).mean()
         self.log("train/avg_norm", avg_norm, rank_zero_only=True, batch_size=batch_size)
         self.log(
-            "train/sigreg_loss", sigreg_loss, rank_zero_only=True, batch_size=batch_size
+            "train/sigreg_loss",
+            sigreg_loss,
+            rank_zero_only=True,
+            batch_size=batch_size,
+            prog_bar=True,
         )
         self.log("train/inv_loss", inv_loss, rank_zero_only=True, batch_size=batch_size)
         self.log(
