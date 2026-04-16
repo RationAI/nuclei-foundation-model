@@ -46,7 +46,9 @@ class SSLMetaArch(LightningModule):
 
         inv_loss = F.mse_loss(l_embed, g_embed)
         sigreg_loss = (self.sigreg_loss(g_embed) + self.sigreg_loss(l_embed)) / 2
-        lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
+        loss = sigreg_loss * self.lamb + (
+            inv_loss + concepts["spatial_loss"] + concepts["sae_loss"]
+        ) * (1 - self.lamb)
 
         avg_norm = torch.linalg.norm(g_embed, dim=-1).mean()
         self.log("train/avg_norm", avg_norm, rank_zero_only=True, batch_size=batch_size)
@@ -55,8 +57,8 @@ class SSLMetaArch(LightningModule):
         )
         self.log("train/inv_loss", inv_loss, rank_zero_only=True, batch_size=batch_size)
         self.log(
-            "train/lejepa_loss",
-            lejepa_loss,
+            "train/total_loss",
+            loss,
             rank_zero_only=True,
             prog_bar=True,
             on_epoch=True,
@@ -64,7 +66,7 @@ class SSLMetaArch(LightningModule):
         )
         self.log_dict(concepts, rank_zero_only=True, prog_bar=True)
 
-        return lejepa_loss + concepts["spatial_loss"] + concepts["sae_loss"]
+        return loss
 
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
         with torch.no_grad():

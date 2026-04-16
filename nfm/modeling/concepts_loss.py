@@ -5,107 +5,62 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 
-def rectangle(x):
-    """Rectangle kernel function."""
-    return ((x > -0.5) & (x < 0.5)).to(x.dtype)
-
-
-class JumpReLUFunction(torch.autograd.Function):
-    """Implementation of JumpReLU with custom backward (STE) for both x and threshold."""
-
-    @staticmethod
-    def forward(ctx, x, threshold, bandwidth):
-        ctx.save_for_backward(x, threshold)
-        ctx.bandwidth = bandwidth
-        return x * (x > threshold).to(x.dtype)
-
-    @staticmethod
-    def backward(ctx, output_grad):
-        x, threshold = ctx.saved_tensors
-        bandwidth = ctx.bandwidth
-
-        # Pseudo-derivative of the step function H(x - theta)
-        ste_term = (1.0 / bandwidth) * rectangle((x - threshold) / bandwidth)
-
-        # 1. Flow gradient through x:
-        # d/dx [x * H(x - theta)] = H(x - theta) + x * delta(x - theta)
-        x_grad = ((x > threshold).to(x.dtype) + x * ste_term) * output_grad
-
-        # 2. Flow gradient through threshold:
-        # d/d_theta [x * H(x - theta)] = -x * delta(x - theta)
-        threshold_grad = (
-            -(threshold / bandwidth)
-            * rectangle((x - threshold) / bandwidth)
-            * output_grad
-        )
-
-        return x_grad, threshold_grad, None
-
-
 class SAE(nn.Module):
-    def __init__(self, dim: int, num_features: int, bandwidth: float = 1.0):
+    def __init__(self, dim: int, num_features: int, k: int = 32):
+        """
+        Args:
+            dim: Dimension of the input embeddings.
+            num_features: Total number of concepts/features in the dictionary.
+            k: The strict number of features to activate per token.
+        """
         super().__init__()
         self.dim = dim
         self.num_features = num_features
-        self.bandwidth = bandwidth
+        self.k = k
 
-        # Using nn.Linear replaces the manual W and b parameter matrices
         self.encoder = nn.Linear(dim, num_features)
         self.decoder = nn.Linear(num_features, dim)
-
-        # Initial threshold set to 0.03
-        self.log_threshold = nn.Parameter(torch.full((num_features,), math.log(0.03)))
 
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """Initializes weights using the specific uniform distributions."""
-        # Encoder: U(-1/n_features, 1/n_features)
-        bound_enc = 1.0 / self.num_features
+        """Standard initialization to ensure healthy variance at the start."""
+        bound_enc = 1.0 / math.sqrt(self.dim)
         nn.init.uniform_(self.encoder.weight, -bound_enc, bound_enc)
         nn.init.uniform_(self.encoder.bias, -bound_enc, bound_enc)
 
-        # Decoder: U(-1/(n_layers*d_model), 1/(n_layers*d_model))
-        # d_out represents the combined n_layers * d_model size
-        bound_dec = 1.0 / self.dim
+        bound_dec = 1.0 / math.sqrt(self.num_features)
         nn.init.uniform_(self.decoder.weight, -bound_dec, bound_dec)
         nn.init.uniform_(self.decoder.bias, -bound_dec, bound_dec)
 
-    def forward(self, x):
-        """Forward pass using nn.Linear layers."""
-        # Pre-activations are now computed directly via the linear layer
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        # 1. Get raw scores for all concepts
         pre_activations = self.encoder(x)
-        threshold = torch.exp(self.log_threshold)
 
-        features = JumpReLUFunction.apply(pre_activations, threshold, self.bandwidth)
+        # 2. Extract the Top-K values and their indices
+        topk_vals, topk_indices = torch.topk(pre_activations, self.k, dim=-1)
 
-        # Reconstruct directly via the linear layer
+        # 3. Apply ReLU (we only want positive concept activations)
+        topk_acts = F.relu(topk_vals)
+
+        # 4. Scatter the Top-K activations back into a zeroed tensor of shape (batch, num_features)
+        features = torch.zeros_like(pre_activations)
+        features.scatter_(-1, topk_indices, topk_acts)
+
+        # 5. Reconstruct the original input
         x_reconstructed = self.decoder(features)
 
-        return x_reconstructed, features, pre_activations
+        return x_reconstructed, features
 
-    def compute_loss(
-        self,
-        x: Tensor,
-        x_reconstructed: Tensor,
-        features: Tensor,
-        pre_activations: Tensor,
-        sparsity_coefficient: float,
-        pre_act_coeff: float = 3e-6,
-    ):
-        """Computes the combined CLT loss: MSE + Tanh Sparsity Penalty + Pre-Activation Loss."""
-        # 1. Mean-Squared Error Reconstruction Loss (e.g., against MLP outputs)
+    def compute_loss(self, x: Tensor, x_reconstructed: Tensor) -> Tensor:
+        """
+        TopK requires no sparsity penalty. The sparsity is strictly enforced
+        by the forward pass. We only minimize reconstruction error.
+        """
         reconstruction_error = x - x_reconstructed
-        reconstruction_loss = torch.mean(reconstruction_error**2, dim=-1)
+        mse_loss = torch.mean(reconstruction_error**2, dim=-1)
 
-        # 2. Tanh Sparsity Penalty
-        sparsity_loss = sparsity_coefficient * torch.sum(torch.tanh(features), dim=-1)
-
-        # 3. Pre-Activation Loss: sum(ReLU(-h_f)) to prevent dead features
-        pre_act_loss = pre_act_coeff * torch.sum(F.relu(-pre_activations), dim=-1)
-
-        # Return the batch-wise mean total loss
-        return torch.mean(reconstruction_loss + sparsity_loss + pre_act_loss, dim=0)
+        return mse_loss.mean()
 
 
 class SpatialConceptLoss(nn.Module):
@@ -115,10 +70,8 @@ class SpatialConceptLoss(nn.Module):
         self.routing_logits = nn.Parameter(torch.randn(num_concepts, 2))
 
     def forward(self, embed: torch.Tensor, knn_indices: torch.Tensor):
-        x_reconstructed, concepts, pre_activations = self.sae(embed)
-        sae_loss = self.sae.compute_loss(
-            embed, x_reconstructed, concepts, pre_activations, sparsity_coefficient=0.1
-        )
+        x_reconstructed, concepts = self.sae(embed)
+        sae_loss = self.sae.compute_loss(embed, x_reconstructed)
 
         N, C = concepts.shape
         k = knn_indices.shape[1]
