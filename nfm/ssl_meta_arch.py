@@ -31,17 +31,17 @@ class SSLMetaArch(LightningModule):
         # self.scl = SpatialConceptLoss(self.config.dim, n_concepts)
         self.probe = nn.Linear(self.config.dim, 1)
 
-        self.proj = MLP(
-            self.config.dim,
-            hidden_channels=[2048, 2048, 256],
-            norm_layer=nn.BatchNorm1d,
-        )
-        self.batch_norm = nn.BatchNorm1d(256, affine=False)
+        # self.proj = MLP(
+        #     self.config.dim,
+        #     hidden_channels=[2048, 2048, 256],
+        #     norm_layer=nn.BatchNorm1d,
+        # )
+        # self.batch_norm = nn.BatchNorm1d(256, affine=False)
 
-        univariate_test = lejepa.univariate.EppsPulley(n_points=17)
-        self.sigreg_loss = lejepa.multivariate.SlicingUnivariateTest(
-            univariate_test=univariate_test, num_slices=1024
-        )
+        # univariate_test = lejepa.univariate.EppsPulley(n_points=17)
+        # self.sigreg_loss = lejepa.multivariate.SlicingUnivariateTest(
+        #     univariate_test=univariate_test, num_slices=1024
+        # )
 
     def forward(
         self, x: Tensor, pos: Tensor, block_mask: BlockMask
@@ -101,7 +101,7 @@ class SSLMetaArch(LightningModule):
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         # unsupervised_loss = self.forward_unlabeled(batch["unlabeled"])
-        supervised_loss = self.forward_labeled(batch["labeled"])
+        supervised_loss = self.forward_labeled(batch)
         return supervised_loss
 
         # return unsupervised_loss + supervised_loss
