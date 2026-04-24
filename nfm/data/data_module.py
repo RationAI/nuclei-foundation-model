@@ -25,36 +25,30 @@ def train_collate_fn(
 
     all_pos = []
     all_efds = []
-    all_g_knns = []
-    all_l_knns = []
     all_knns = []
+    all_indices = []
 
     current_global_idx = 0
     for b in batch:
-        sort_indices = block_spatial_sort(
-            b["pos"], block_size, global_offset=current_global_idx
-        )
-        sorted_pos = b["pos"][sort_indices]
-        _, knn = nbrs.fit(sorted_pos).kneighbors(sorted_pos)
+        for crop in range(len(b["pos"])):
+            sort_indices = block_spatial_sort(
+                b["pos"][crop], block_size, global_offset=current_global_idx
+            )
+            sorted_pos = b["pos"][crop][sort_indices]
+            _, knn = nbrs.fit(sorted_pos).kneighbors(sorted_pos)
 
-        all_pos.append(torch.from_numpy(sorted_pos))
-        all_g_knns.append(torch.from_numpy(knn))
-        all_l_knns.append(torch.from_numpy(knn[:, :1]))
-        all_efds.append(b["efds"][sort_indices])
-        all_knns.append(torch.from_numpy(knn[:, 1:]) + current_global_idx)
-        current_global_idx += len(sorted_pos)
+            all_pos.append(torch.from_numpy(sorted_pos))
+            all_knns.append(torch.from_numpy(knn))
+            all_efds.append(torch.from_numpy(b["efds"][crop][sort_indices]))
+            all_indices.append(torch.from_numpy(b["indices"][crop][sort_indices]))
+            current_global_idx += len(sorted_pos)
 
     return {
-        "global_block_mask": create_ragged_block_quantized_knn_mask(
-            all_g_knns, block_size
-        ),
-        "local_block_mask": create_ragged_block_quantized_knn_mask(
-            all_l_knns, block_size
-        ),
+        "block_mask": create_ragged_block_quantized_knn_mask(all_knns, block_size),
         "pos": torch.cat(all_pos),
         "efds": torch.cat(all_efds),
-        "g_seq_lens": torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32),
-        "knn_indices": torch.cat(all_knns),
+        "all_indices": torch.cat(all_indices),
+        "seq_lens": torch.cat([torch.from_numpy(b["seq_lens"]) for b in batch]),
     }
 
 

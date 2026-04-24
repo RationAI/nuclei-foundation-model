@@ -1,19 +1,18 @@
 import heapq
+import itertools
 import random
 
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
-import torch
 from degraph import build_spatial_graph
 from numpy.typing import NDArray
-from torch import Tensor
 from torch.utils.data import Dataset
 
 from nfm.data.efd import elliptic_fourier_descriptors
 
 
-type Sample = dict[str, Tensor | np.ndarray | int]
+type Sample = dict[str, list[np.ndarray] | int | np.ndarray]
 
 
 class NucleiDataset(Dataset[Sample]):
@@ -21,7 +20,10 @@ class NucleiDataset(Dataset[Sample]):
         self,
         slides_path: str,
         nuclei_path: str,
-        global_crop_k: int = 4096,
+        global_crop_k: int = 2048,
+        local_crop_k: int = 256,
+        n_global_crops: int = 2,
+        n_local_crops: int = 6,
         alpha: float = 0.85,
         efd_order: int = 16,
     ) -> None:
@@ -30,6 +32,9 @@ class NucleiDataset(Dataset[Sample]):
         )
         self.nuclei_path = nuclei_path
         self.global_crop_k = global_crop_k
+        self.local_crop_k = local_crop_k
+        self.n_global_crops = n_global_crops
+        self.n_local_crops = n_local_crops
         self.alpha = alpha
         self.efd_order = efd_order
 
@@ -135,6 +140,45 @@ class NucleiDataset(Dataset[Sample]):
 
         return points[keep_indices], keep_indices
 
+    def sample_crops(
+        self,
+        points: NDArray[np.float32],
+        graph: list[list[tuple[int, float]]],
+    ) -> tuple[list[list[int]], list[list[int]], NDArray[np.intp]]:
+        global_crops_indices: list[list[int]] = []
+
+        seed = random.randint(0, len(points) - 1)
+        for _ in range(self.n_global_crops):
+            indices = self.find_component(seed, self.global_crop_k, graph, points)
+            global_crops_indices.append(indices)
+            seed_idx = int(random.triangular(0, len(indices) - 1, len(indices) * 0.9))
+            seed = indices[seed_idx]
+
+        all_indices_set = set(itertools.chain.from_iterable(global_crops_indices))
+        all_indices = np.array(list(all_indices_set), dtype=np.intp)
+        index_map = {k: v for v, k in enumerate(all_indices)}
+
+        remapped_global = [
+            [index_map[i] for i in crop] for crop in global_crops_indices
+        ]
+
+        local_seeds = np.random.choice(all_indices, self.n_local_crops, replace=False)
+        remapped_local = [
+            [
+                index_map[i]
+                for i in self.find_component(
+                    seed,
+                    self.local_crop_k,
+                    graph,
+                    points,
+                    indices=all_indices_set,
+                )
+            ]
+            for seed in local_seeds
+        ]
+
+        return remapped_global, remapped_local, all_indices
+
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
         pf = pq.ParquetFile(
@@ -144,23 +188,39 @@ class NucleiDataset(Dataset[Sample]):
         points = points_col.values.to_numpy().reshape(-1, 2).astype(np.float32)
 
         points, keep_indices = self.downsample_points(
-            points, limit=int(self.global_crop_k / (1 - self.alpha))
+            points,
+            limit=int(self.n_global_crops * self.global_crop_k / (1 - self.alpha)),
         )
         graph = build_spatial_graph(points)
 
-        # crop generation
-        seed = random.randint(0, len(points) - 1)
-        indices = self.find_component(seed, self.global_crop_k, graph, points)
+        global_crops_indices, local_crops_indices, all_indices = self.sample_crops(
+            points, graph
+        )
 
         polygons = self.radial_to_polygon(
-            points[indices], self.read_radial_distances(pf, keep_indices[indices])
+            points[all_indices],
+            self.read_radial_distances(pf, keep_indices[all_indices]),
         )
         centroids, efds = self.polygon_to_efd(
             polygons, mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
         )
 
+        global_crop_pos = [centroids[crop] for crop in global_crops_indices]
+        global_crop_efds = [efds[crop] for crop in global_crops_indices]
+        local_crop_pos = [centroids[crop] for crop in local_crops_indices]
+        local_crop_efds = [efds[crop] for crop in local_crops_indices]
+
+        global_crop_original_indices = [
+            all_indices[crop] for crop in global_crops_indices
+        ]
+        local_crop_original_indices = [
+            all_indices[crop] for crop in local_crops_indices
+        ]
+
+        all_crop_pos = global_crop_pos + local_crop_pos
         return {
-            "pos": centroids,
-            "efds": torch.from_numpy(efds),
-            "seq_len": len(centroids),
+            "pos": all_crop_pos,
+            "efds": global_crop_efds + local_crop_efds,
+            "indices": global_crop_original_indices + local_crop_original_indices,
+            "seq_lens": np.array([len(crop) for crop in all_crop_pos], dtype=np.intp),
         }

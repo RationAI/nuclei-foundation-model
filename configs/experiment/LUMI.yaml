@@ -2,7 +2,7 @@
 
 data:
   batch_size:
-    train: 6
+    train: 8
     train_labeled: 4
   num_workers:
     train: 4

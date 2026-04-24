@@ -3,15 +3,19 @@ from typing import Any
 import lejepa
 import torch
 import torch.nn.functional as F
+from einops import rearrange
 from lightning import LightningModule
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torchvision.ops import MLP
 
 from nfm.configuration import Config
-from nfm.modeling.concepts_loss import SpatialConceptLoss
 from nfm.modeling.transformer import NFM
+
+
+# from nfm.modeling.concepts_loss import SpatialConceptLoss
 
 
 class SSLMetaArch(LightningModule):
@@ -24,8 +28,14 @@ class SSLMetaArch(LightningModule):
 
         self.config = Config(**config)
         self.model = NFM(self.config)
-        self.scl = SpatialConceptLoss(self.config.dim, n_concepts)
+        # self.scl = SpatialConceptLoss(self.config.dim, n_concepts)
         self.probe = nn.Linear(self.config.dim, 1)
+
+        self.proj = MLP(
+            self.config.dim,
+            hidden_channels=[2048, 2048, 256],
+            norm_layer=nn.BatchNorm1d,
+        )
 
         univariate_test = lejepa.univariate.EppsPulley(n_points=17)
         self.sigreg_loss = lejepa.multivariate.SlicingUnivariateTest(
@@ -38,20 +48,18 @@ class SSLMetaArch(LightningModule):
         return self.model(x, pos, block_mask)
 
     def forward_unlabeled(self, batch: dict[str, Any]) -> Tensor:
-        batch_size = len(batch["g_seq_lens"])
-        g_embed = self(batch["efds"], batch["pos"], batch["global_block_mask"])
-        l_embed = self(batch["efds"], batch["pos"], batch["local_block_mask"])
+        all_embed = self(batch["efds"], batch["pos"], batch["block_mask"])
 
-        concepts = self.scl(g_embed, batch["knn_indices"])
+        crops = torch.split(all_embed, batch["seq_lens"], dim=0)
+        all_proj = self.proj(torch.stack([c.mean(dim=0) for c in crops]))
+        all_proj = rearrange(all_proj, "(b n) d -> b n d", n=8)
+        batch_size = all_proj.shape[0]
 
-        inv_loss = F.mse_loss(l_embed, g_embed)
-        sigreg_loss = (self.sigreg_loss(g_embed) + self.sigreg_loss(l_embed)) / 2
-        loss = sigreg_loss * self.lamb + (
-            inv_loss + concepts["spatial_loss"] + concepts["sae_loss"]
-        ) * (1 - self.lamb)
+        centers = all_proj[:, :2].mean(dim=1, keepdim=True)
+        inv_loss = (all_proj - centers).square().mean()
+        sigreg_loss = self.sigreg_loss(all_proj)
+        lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
 
-        avg_norm = torch.linalg.norm(g_embed, dim=-1).mean()
-        self.log("train/avg_norm", avg_norm, rank_zero_only=True, batch_size=batch_size)
         self.log(
             "train/sigreg_loss",
             sigreg_loss,
@@ -62,15 +70,14 @@ class SSLMetaArch(LightningModule):
         self.log("train/inv_loss", inv_loss, rank_zero_only=True, batch_size=batch_size)
         self.log(
             "train/total_loss",
-            loss,
+            lejepa_loss,
             rank_zero_only=True,
             prog_bar=True,
             on_epoch=True,
             batch_size=batch_size,
         )
-        self.log_dict(concepts, rank_zero_only=True, prog_bar=True)
 
-        return loss
+        return lejepa_loss
 
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
         with torch.no_grad():
