@@ -7,7 +7,7 @@ mode: ???
 checkpoint: null
 
 trainer:
-  max_epochs: 100
+  max_epochs: 10000
   sync_batchnorm: true
   log_every_n_steps: 10
   precision: bf16-mixed
