@@ -83,8 +83,8 @@ class SSLMetaArch(LightningModule):
         return lejepa_loss
 
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
-        with torch.no_grad():
-            embed = self(batch["efds"], batch["pos"], batch["block_mask"])
+        # with torch.no_grad():
+        embed = self(batch["efds"], batch["pos"], batch["block_mask"])
 
         probe_labels = self.probe(embed)
 
@@ -100,10 +100,11 @@ class SSLMetaArch(LightningModule):
         return probe_loss
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
-        unsupervised_loss = self.forward_unlabeled(batch["unlabeled"])
+        # unsupervised_loss = self.forward_unlabeled(batch["unlabeled"])
         supervised_loss = self.forward_labeled(batch["labeled"])
+        return supervised_loss
 
-        return unsupervised_loss + supervised_loss
+        # return unsupervised_loss + supervised_loss
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
         no_decay_params = [

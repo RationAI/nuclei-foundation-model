@@ -111,34 +111,48 @@ class DataModule(LightningDataModule):
 
     def train_dataloader(self) -> Iterable[dict[str, Tensor]]:
 
-        return CombinedLoader(
-            {
-                "unlabeled": DataLoader(
-                    self.train,
-                    batch_size=self.batch_size["train"],
-                    shuffle=True,
-                    drop_last=True,
-                    num_workers=self.num_workers["train"],
-                    persistent_workers=True,
-                    pin_memory=True,
-                    in_order=False,
-                    collate_fn=partial(
-                        train_collate_fn, block_size=self.block_size, k=self.k
-                    ),
-                ),
-                "labeled": DataLoader(
-                    self.train_labeled,
-                    batch_size=self.batch_size["train_labeled"],
-                    shuffle=True,
-                    drop_last=True,
-                    num_workers=self.num_workers["train_labeled"],
-                    persistent_workers=True,
-                    pin_memory=True,
-                    in_order=False,
-                    collate_fn=partial(
-                        inference_collate_fn, block_size=self.block_size, k=self.k
-                    ),
-                ),
-            },
-            mode="max_size_cycle",
+        return DataLoader(
+            self.train_labeled,
+            batch_size=self.batch_size["train_labeled"],
+            shuffle=True,
+            drop_last=True,
+            num_workers=self.num_workers["train_labeled"],
+            persistent_workers=True,
+            pin_memory=True,
+            in_order=False,
+            collate_fn=partial(
+                inference_collate_fn, block_size=self.block_size, k=self.k
+            ),
         )
+
+        # return CombinedLoader(
+        #     {
+        #         "unlabeled": DataLoader(
+        #             self.train,
+        #             batch_size=self.batch_size["train"],
+        #             shuffle=True,
+        #             drop_last=True,
+        #             num_workers=self.num_workers["train"],
+        #             persistent_workers=True,
+        #             pin_memory=True,
+        #             in_order=False,
+        #             collate_fn=partial(
+        #                 train_collate_fn, block_size=self.block_size, k=self.k
+        #             ),
+        #         ),
+        #         "labeled": DataLoader(
+        #             self.train_labeled,
+        #             batch_size=self.batch_size["train_labeled"],
+        #             shuffle=True,
+        #             drop_last=True,
+        #             num_workers=self.num_workers["train_labeled"],
+        #             persistent_workers=True,
+        #             pin_memory=True,
+        #             in_order=False,
+        #             collate_fn=partial(
+        #                 inference_collate_fn, block_size=self.block_size, k=self.k
+        #             ),
+        #         ),
+        #     },
+        #     mode="max_size_cycle",
+        # )
