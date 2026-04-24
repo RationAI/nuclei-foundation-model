@@ -12,7 +12,7 @@ from torch.utils.data import Dataset
 from nfm.data.efd import elliptic_fourier_descriptors
 
 
-type Sample = dict[str, list[np.ndarray] | int | np.ndarray]
+type Sample = dict[str, list[np.ndarray] | int | list[int]]
 
 
 class NucleiDataset(Dataset[Sample]):
@@ -222,5 +222,5 @@ class NucleiDataset(Dataset[Sample]):
             "pos": all_crop_pos,
             "efds": global_crop_efds + local_crop_efds,
             "indices": global_crop_original_indices + local_crop_original_indices,
-            "seq_lens": np.array([len(crop) for crop in all_crop_pos], dtype=np.intp),
+            "seq_lens": [len(crop) for crop in all_crop_pos],
         }

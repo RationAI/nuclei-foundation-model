@@ -20,7 +20,7 @@ from nfm.modeling.block_mask import (
 
 def train_collate_fn(
     batch: list[dict[str, np.ndarray]], block_size: int, k: int
-) -> dict[str, Tensor | BlockMask]:
+) -> dict[str, Tensor | BlockMask | list[int]]:
     nbrs = NearestNeighbors(n_neighbors=k, metric="euclidean")
 
     all_pos = []
@@ -48,7 +48,7 @@ def train_collate_fn(
         "pos": torch.cat(all_pos),
         "efds": torch.cat(all_efds),
         "all_indices": torch.cat(all_indices),
-        "seq_lens": torch.cat([torch.from_numpy(b["seq_lens"]) for b in batch]),
+        "seq_lens": [x for b in batch for x in b["seq_lens"]],
     }
 
 
