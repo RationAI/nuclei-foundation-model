@@ -36,6 +36,7 @@ class SSLMetaArch(LightningModule):
             hidden_channels=[2048, 2048, 256],
             norm_layer=nn.BatchNorm1d,
         )
+        self.batch_norm = nn.BatchNorm1d(256, affine=False)
 
         univariate_test = lejepa.univariate.EppsPulley(n_points=17)
         self.sigreg_loss = lejepa.multivariate.SlicingUnivariateTest(
@@ -51,7 +52,9 @@ class SSLMetaArch(LightningModule):
         all_embed = self(batch["efds"], batch["pos"], batch["block_mask"])
 
         crops = torch.split(all_embed, batch["seq_lens"], dim=0)
-        all_proj = self.proj(torch.stack([c.mean(dim=0) for c in crops]))
+        all_proj = self.batch_norm(
+            self.proj(torch.stack([c.mean(dim=0) for c in crops]))
+        )
         all_proj = rearrange(all_proj, "(b n) d -> b n d", n=8)
         batch_size = all_proj.shape[0]
 
