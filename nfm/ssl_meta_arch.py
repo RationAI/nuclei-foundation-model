@@ -104,7 +104,20 @@ class SSLMetaArch(LightningModule):
         supervised_loss = self.forward_labeled(batch)
         return supervised_loss
 
-        # return unsupervised_loss + supervised_loss
+    def validation_step(self, batch: dict[str, Any]) -> None:
+        embed = self(batch["efds"], batch["pos"], batch["block_mask"])
+
+        probe_labels = self.probe(embed)
+
+        probe_loss = F.binary_cross_entropy_with_logits(probe_labels, batch["labels"])
+        self.log(
+            "validation/probe_loss",
+            probe_loss,
+            rank_zero_only=True,
+            on_epoch=True,
+            sync_dist_group=True,
+            batch_size=len(batch["seq_lens"]),
+        )
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
         no_decay_params = [

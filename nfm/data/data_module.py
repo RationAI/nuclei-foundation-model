@@ -5,7 +5,6 @@ import numpy as np
 import torch
 from hydra.utils import instantiate
 from lightning import LightningDataModule
-from lightning.pytorch.utilities import CombinedLoader
 from omegaconf import DictConfig
 from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
@@ -105,17 +104,32 @@ class DataModule(LightningDataModule):
         match stage:
             case "fit":
                 self.train = instantiate(self.datasets["train"])
-                self.train_labeled = instantiate(self.datasets["train_labeled"])
-            case "test":
-                self.test = instantiate(self.datasets["test"])
+                train_labeled = instantiate(self.datasets["train_labeled"])
+                self.train_labeled, self.val_labeled = torch.utils.data.random_split(
+                    train_labeled, [0.7, 0.3]
+                )
 
     def train_dataloader(self) -> Iterable[dict[str, Tensor]]:
-
         return DataLoader(
             self.train_labeled,
             batch_size=self.batch_size["train_labeled"],
             shuffle=True,
             drop_last=True,
+            num_workers=self.num_workers["train_labeled"],
+            persistent_workers=True,
+            pin_memory=True,
+            in_order=False,
+            collate_fn=partial(
+                inference_collate_fn, block_size=self.block_size, k=self.k
+            ),
+        )
+
+    def val_dataloader(self) -> Iterable[dict[str, Tensor]]:
+        return DataLoader(
+            self.val_labeled,
+            batch_size=self.batch_size["train_labeled"],
+            shuffle=False,
+            drop_last=False,
             num_workers=self.num_workers["train_labeled"],
             persistent_workers=True,
             pin_memory=True,
