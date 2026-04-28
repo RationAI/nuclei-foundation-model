@@ -116,6 +116,7 @@ class SSLMetaArch(LightningModule):
             rank_zero_only=True,
             on_epoch=True,
             sync_dist=True,
+            prog_bar=True,
             batch_size=len(batch["seq_lens"]),
         )
 

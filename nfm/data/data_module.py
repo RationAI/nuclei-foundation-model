@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from copy import deepcopy
 from functools import partial
 
 import numpy as np
@@ -11,6 +12,7 @@ from torch import Tensor
 from torch.nn.attention.flex_attention import BlockMask
 from torch.utils.data import DataLoader
 
+from nfm.data.augmentations import Compose
 from nfm.modeling.block_mask import (
     block_spatial_sort,
     create_ragged_block_quantized_knn_mask,
@@ -108,6 +110,8 @@ class DataModule(LightningDataModule):
                 self.train_labeled, self.val_labeled = torch.utils.data.random_split(
                     train_labeled, [0.7, 0.3]
                 )
+                self.val_labeled.dataset = deepcopy(self.val_labeled.dataset)
+                self.val_labeled.dataset.augmentation = Compose([])
 
     def train_dataloader(self) -> Iterable[dict[str, Tensor]]:
         return DataLoader(

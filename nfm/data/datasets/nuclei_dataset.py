@@ -27,7 +27,7 @@ class NucleiDataset(Dataset[Sample]):
         n_local_crops: int = 6,
         alpha: float = 0.85,
         efd_order: int = 16,
-        augmentation: PolygonAugmentation | list[PolygonAugmentation] | None = None,
+        augmentation: list[PolygonAugmentation] | None = None,
     ) -> None:
         self.slides = pd.read_parquet(
             slides_path, columns=["id", "mpp_x", "mpp_y", "dataset", "organ"]
@@ -39,13 +39,7 @@ class NucleiDataset(Dataset[Sample]):
         self.n_local_crops = n_local_crops
         self.alpha = alpha
         self.efd_order = efd_order
-
-        if augmentation is None:
-            self.augmentation: Compose = Compose([])
-        elif isinstance(augmentation, list):
-            self.augmentation = Compose(augmentation)
-        else:
-            self.augmentation = Compose([augmentation])
+        self.augmentation = Compose(augmentation or [])
 
     def __len__(self) -> int:
         return len(self.slides)
@@ -75,9 +69,7 @@ class NucleiDataset(Dataset[Sample]):
 
             for n_idx, edge_dist in graph[current_idx]:
                 if not visited[n_idx] and (indices is None or n_idx in indices):
-                    start_dist = np.linalg.norm(
-                        centroids[n_idx] - start_point_coords
-                    )
+                    start_dist = np.linalg.norm(centroids[n_idx] - start_point_coords)
                     cost = self.alpha * edge_dist + (1 - self.alpha) * start_dist
                     heapq.heappush(pq, (cost, n_idx))
 
@@ -100,9 +92,7 @@ class NucleiDataset(Dataset[Sample]):
         polygons[..., 1] *= mpp_y
 
         centroids = polygons.mean(axis=1)
-        efd = elliptic_fourier_descriptors(
-            polygons.astype(np.float64), self.efd_order
-        )
+        efd = elliptic_fourier_descriptors(polygons.astype(np.float64), self.efd_order)
 
         return centroids, efd.reshape(-1, self.efd_order * 4).astype(np.float32)
 
@@ -157,9 +147,7 @@ class NucleiDataset(Dataset[Sample]):
         for _ in range(self.n_global_crops):
             indices = self.find_component(seed, self.global_crop_k, graph, points)
             global_crops_indices.append(indices)
-            seed_idx = int(
-                random.triangular(0, len(indices) - 1, len(indices) * 0.9)
-            )
+            seed_idx = int(random.triangular(0, len(indices) - 1, len(indices) * 0.9))
             seed = indices[seed_idx]
 
         all_indices_set = set(itertools.chain.from_iterable(global_crops_indices))

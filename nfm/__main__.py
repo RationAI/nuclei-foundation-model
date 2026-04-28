@@ -11,7 +11,7 @@ from nfm.ssl_meta_arch import SSLMetaArch
 @hydra.main(config_path="../configs", config_name="nfm", version_base=None)
 def main(config: DictConfig) -> None:
     torch.set_float32_matmul_precision("high")
-    seed_everything(config.seed, workers=True)
+    seed_everything(config.seed)
 
     data = hydra.utils.instantiate(
         config.data,
