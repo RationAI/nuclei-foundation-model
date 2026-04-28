@@ -5,29 +5,10 @@ import pandas as pd
 import torch
 from degraph import build_spatial_graph
 
-from nfm.data.augmentations import PolygonAugmentation
 from nfm.data.datasets.nuclei_dataset import NucleiDataset, Sample
 
 
 class ClassificationNucleiDataset(NucleiDataset):
-    def __init__(
-        self,
-        slides_path: str,
-        nuclei_path: str,
-        global_crop_k: int = 2048,
-        alpha: float = 0.85,
-        efd_order: int = 16,
-        augmentation: PolygonAugmentation | list[PolygonAugmentation] | None = None,
-    ) -> None:
-        super().__init__(
-            slides_path=slides_path,
-            nuclei_path=nuclei_path,
-            global_crop_k=global_crop_k,
-            alpha=alpha,
-            efd_order=efd_order,
-            augmentation=augmentation,
-        )
-
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
         df = pd.read_parquet(

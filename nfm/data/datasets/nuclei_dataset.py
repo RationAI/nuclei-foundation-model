@@ -9,7 +9,7 @@ from degraph import build_spatial_graph
 from numpy.typing import NDArray
 from torch.utils.data import Dataset
 
-from nfm.data.augmentations import Compose, PolygonAugmentation
+from nfm.data.augmentations import Compose
 from nfm.data.efd import elliptic_fourier_descriptors
 
 
@@ -27,7 +27,7 @@ class NucleiDataset(Dataset[Sample]):
         n_local_crops: int = 6,
         alpha: float = 0.85,
         efd_order: int = 16,
-        augmentation: list[PolygonAugmentation] | None = None,
+        augmentation: Compose | None = None,
     ) -> None:
         self.slides = pd.read_parquet(
             slides_path, columns=["id", "mpp_x", "mpp_y", "dataset", "organ"]
@@ -39,7 +39,7 @@ class NucleiDataset(Dataset[Sample]):
         self.n_local_crops = n_local_crops
         self.alpha = alpha
         self.efd_order = efd_order
-        self.augmentation = Compose(augmentation or [])
+        self.augmentation = augmentation or Compose([])
 
     def __len__(self) -> int:
         return len(self.slides)
