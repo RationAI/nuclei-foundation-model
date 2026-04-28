@@ -13,10 +13,56 @@ data:
     _target_: nfm.data.datasets.NucleiDataset
     slides_path: /flash/project_465002057/nuclei/train_cropped_dedup.parquet
     nuclei_path: /flash/project_465002057/nuclei/cells
+    augmentation:
+      _target_: nfm.data.augmentations.Compose
+      augmentations:
+        - _target_: nfm.data.augmentations.PositionJitter
+          max_shift: 5.0
+        - _target_: nfm.data.augmentations.FieldRotation
+          max_angle: 3.141592653589793
+        - _target_: nfm.data.augmentations.NucleiRotation
+          max_angle: 3.141592653589793
+        - _target_: nfm.data.augmentations.FieldScale
+          scale_range:
+            - 0.9
+            - 1.1
+        - _target_: nfm.data.augmentations.PolygonScale
+          scale_range:
+            - 0.9
+            - 1.1
+        - _target_: nfm.data.augmentations.ShapeDistortion
+          noise_std: 1.0
+        - _target_: nfm.data.augmentations.AffineSkew
+          skew_range:
+            - -0.1
+            - 0.1
   train_labeled:
     _target_: nfm.data.datasets.ClassificationNucleiDataset
     slides_path: /flash/project_465002057/nuclei/labeled_nuclei/slide_metadata.parquet
     nuclei_path: /flash/project_465002057/nuclei/labeled_nuclei/labels
+    augmentation:
+      _target_: nfm.data.augmentations.Compose
+      augmentations:
+        - _target_: nfm.data.augmentations.PositionJitter
+          max_shift: 5.0
+        - _target_: nfm.data.augmentations.FieldRotation
+          max_angle: 3.141592653589793
+        - _target_: nfm.data.augmentations.NucleiRotation
+          max_angle: 3.141592653589793
+        - _target_: nfm.data.augmentations.FieldScale
+          scale_range:
+            - 0.9
+            - 1.1
+        - _target_: nfm.data.augmentations.PolygonScale
+          scale_range:
+            - 0.9
+            - 1.1
+        - _target_: nfm.data.augmentations.ShapeDistortion
+          noise_std: 1.0
+        - _target_: nfm.data.augmentations.AffineSkew
+          skew_range:
+            - -0.1
+            - 0.1
 
 trainer:
   strategy:

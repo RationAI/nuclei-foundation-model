@@ -9,6 +9,7 @@ from degraph import build_spatial_graph
 from numpy.typing import NDArray
 from torch.utils.data import Dataset
 
+from nfm.data.augmentations import Compose, PolygonAugmentation
 from nfm.data.efd import elliptic_fourier_descriptors
 
 
@@ -26,6 +27,7 @@ class NucleiDataset(Dataset[Sample]):
         n_local_crops: int = 6,
         alpha: float = 0.85,
         efd_order: int = 16,
+        augmentation: PolygonAugmentation | list[PolygonAugmentation] | None = None,
     ) -> None:
         self.slides = pd.read_parquet(
             slides_path, columns=["id", "mpp_x", "mpp_y", "dataset", "organ"]
@@ -37,6 +39,13 @@ class NucleiDataset(Dataset[Sample]):
         self.n_local_crops = n_local_crops
         self.alpha = alpha
         self.efd_order = efd_order
+
+        if augmentation is None:
+            self.augmentation: Compose = Compose([])
+        elif isinstance(augmentation, list):
+            self.augmentation = Compose(augmentation)
+        else:
+            self.augmentation = Compose([augmentation])
 
     def __len__(self) -> int:
         return len(self.slides)
@@ -66,7 +75,9 @@ class NucleiDataset(Dataset[Sample]):
 
             for n_idx, edge_dist in graph[current_idx]:
                 if not visited[n_idx] and (indices is None or n_idx in indices):
-                    start_dist = np.linalg.norm(centroids[n_idx] - start_point_coords)
+                    start_dist = np.linalg.norm(
+                        centroids[n_idx] - start_point_coords
+                    )
                     cost = self.alpha * edge_dist + (1 - self.alpha) * start_dist
                     heapq.heappush(pq, (cost, n_idx))
 
@@ -89,7 +100,9 @@ class NucleiDataset(Dataset[Sample]):
         polygons[..., 1] *= mpp_y
 
         centroids = polygons.mean(axis=1)
-        efd = elliptic_fourier_descriptors(polygons.astype(np.float64), self.efd_order)
+        efd = elliptic_fourier_descriptors(
+            polygons.astype(np.float64), self.efd_order
+        )
 
         return centroids, efd.reshape(-1, self.efd_order * 4).astype(np.float32)
 
@@ -103,22 +116,16 @@ class NucleiDataset(Dataset[Sample]):
         rg_matches = np.searchsorted(rg_starts, indices, side="right") - 1
         unique_rgs = np.unique(rg_matches)
 
-        # Read only the necessary row groups
         radial_table = pf.read_row_groups(unique_rgs, columns=["radial_distances"])
 
-        # Map sorted_file_indices to indices in the new concatenated table
-        # We need to adjust indices based on the row groups we actually read
         read_rg_lengths = [rg_lengths[i] for i in unique_rgs]
         new_rg_starts = np.concatenate(([0], np.cumsum(read_rg_lengths)[:-1]))
 
-        # Create lookup: RG_index -> start_in_new_table
         rg_lookup = np.zeros(pf.num_row_groups, dtype=np.int64)
         rg_lookup[unique_rgs] = new_rg_starts
 
-        # Calculate indices in the new table
         indices_in_new = indices - rg_starts[rg_matches] + rg_lookup[rg_matches]
 
-        # Extract values and restore original order
         return (
             radial_table["radial_distances"]
             .take(indices_in_new)
@@ -130,7 +137,6 @@ class NucleiDataset(Dataset[Sample]):
     def downsample_points(
         self, points: NDArray[np.float32], limit: int
     ) -> tuple[NDArray[np.float32], NDArray[np.intp]]:
-        """Downsample points to a specified limit using a distance-based approach."""
         if len(points) <= limit:
             return points, np.arange(len(points))
 
@@ -151,7 +157,9 @@ class NucleiDataset(Dataset[Sample]):
         for _ in range(self.n_global_crops):
             indices = self.find_component(seed, self.global_crop_k, graph, points)
             global_crops_indices.append(indices)
-            seed_idx = int(random.triangular(0, len(indices) - 1, len(indices) * 0.9))
+            seed_idx = int(
+                random.triangular(0, len(indices) - 1, len(indices) * 0.9)
+            )
             seed = indices[seed_idx]
 
         all_indices_set = set(itertools.chain.from_iterable(global_crops_indices))
@@ -201,6 +209,9 @@ class NucleiDataset(Dataset[Sample]):
             points[all_indices],
             self.read_radial_distances(pf, keep_indices[all_indices]),
         )
+
+        polygons = self.augmentation(polygons)
+
         centroids, efds = self.polygon_to_efd(
             polygons, mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
         )
