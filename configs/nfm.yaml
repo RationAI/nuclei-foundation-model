@@ -14,9 +14,10 @@ trainer:
   callbacks:
     model_checkpoint:
       _target_: lightning.pytorch.callbacks.ModelCheckpoint
-      save_top_k: 3
+      save_top_k: 1
       save_last: true
-      monitor: train/lejepa_loss
+      every_n_epochs: 50
+      monitor: validation/probe_loss
       mode: min
 
 model:
