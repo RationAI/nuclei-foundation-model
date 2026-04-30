@@ -22,25 +22,27 @@ data:
         - _target_: nfm.data.augmentations.FieldRotation
           max_angle: 3.14
         - _target_: nfm.data.augmentations.NucleiRotation
-          max_angle: 3.14
+          max_angle: 0.785 # pi/4
         - _target_: nfm.data.augmentations.FieldScale
           scale_range:
             - 0.9
             - 1.1
         - _target_: nfm.data.augmentations.PolygonScale
           scale_range:
-            - 0.9
-            - 1.1
+            - 0.85
+            - 1.15
         - _target_: nfm.data.augmentations.ShapeDistortion
-          noise_std: 1.0
+          noise_std: 0.5
+          smoothness: 2
         - _target_: nfm.data.augmentations.AffineSkew
           skew_range:
-            - -0.1
-            - 0.1
+            - -0.05
+            - 0.05
         - _target_: nfm.data.augmentations.RandomDrop
-          p: 0.1
+          p: 0.05
         - _target_: nfm.data.augmentations.ClusterDrop
-          p: 0.1
+          p: 0.05
+
   train_labeled:
     _target_: nfm.data.datasets.ClassificationNucleiDataset
     slides_path: /flash/project_465002057/nuclei/labeled_nuclei/slide_metadata.parquet
@@ -54,25 +56,26 @@ data:
         - _target_: nfm.data.augmentations.FieldRotation
           max_angle: 3.14
         - _target_: nfm.data.augmentations.NucleiRotation
-          max_angle: 3.14
+          max_angle: 0.785 # pi/4
         - _target_: nfm.data.augmentations.FieldScale
           scale_range:
             - 0.9
             - 1.1
         - _target_: nfm.data.augmentations.PolygonScale
           scale_range:
-            - 0.9
-            - 1.1
+            - 0.85
+            - 1.15
         - _target_: nfm.data.augmentations.ShapeDistortion
-          noise_std: 1.0
+          noise_std: 0.5
+          smoothness: 2
         - _target_: nfm.data.augmentations.AffineSkew
           skew_range:
-            - -0.1
-            - 0.1
+            - -0.05
+            - 0.05
         - _target_: nfm.data.augmentations.RandomDrop
-          p: 0.1
+          p: 0.05
         - _target_: nfm.data.augmentations.ClusterDrop
-          p: 0.1
+          p: 0.05
 
 trainer:
   strategy:

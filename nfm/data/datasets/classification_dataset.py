@@ -27,13 +27,13 @@ class ClassificationNucleiDataset(NucleiDataset):
         comp_indices = self.find_component(seed, self.global_crop_k, graph, points)
         indices = keep_indices[comp_indices]
 
-        augmented = self.augmentation(
-            polygons=polygons[indices], labels=labels[indices]
-        )
+        polygons = polygons[indices]
+        polygons[..., 0] *= slide.mpp_x
+        polygons[..., 1] *= slide.mpp_y
 
-        centroids, efds = self.polygon_to_efd(
-            augmented["polygons"], mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
-        )
+        augmented = self.augmentation(polygons=polygons, labels=labels[indices])
+
+        centroids, efds = self.polygon_to_efd(augmented["polygons"])
 
         return {
             "pos": centroids,

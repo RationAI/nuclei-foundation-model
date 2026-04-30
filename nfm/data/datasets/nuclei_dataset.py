@@ -86,11 +86,8 @@ class NucleiDataset(Dataset[Sample]):
         return points[:, None] + polar
 
     def polygon_to_efd(
-        self, polygons: NDArray[np.float32], mpp_x: float, mpp_y: float
+        self, polygons: NDArray[np.float32]
     ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
-        polygons[..., 0] *= mpp_x
-        polygons[..., 1] *= mpp_y
-
         centroids = polygons.mean(axis=1)
         efd = elliptic_fourier_descriptors(polygons.astype(np.float64), self.efd_order)
 
@@ -198,11 +195,11 @@ class NucleiDataset(Dataset[Sample]):
             self.read_radial_distances(pf, keep_indices[all_indices]),
         )
 
+        polygons[..., 0] *= slide.mpp_x
+        polygons[..., 1] *= slide.mpp_y
         polygons = self.augmentation(polygons)
 
-        centroids, efds = self.polygon_to_efd(
-            polygons, mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
-        )
+        centroids, efds = self.polygon_to_efd(polygons)
 
         global_crop_pos = [centroids[crop] for crop in global_crops_indices]
         global_crop_efds = [efds[crop] for crop in global_crops_indices]

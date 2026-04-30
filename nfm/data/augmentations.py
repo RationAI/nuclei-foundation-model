@@ -10,6 +10,7 @@ from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.ndimage import gaussian_filter1d
 
 
 class PolygonAugmentation(Protocol):
@@ -161,30 +162,50 @@ class PolygonScale:
 
 
 class ShapeDistortion:
-    """Radial shape perturbation.
+    """Radial shape perturbation with spatial correlation.
 
-    For each boundary vertex the direction from the polygon centroid is
-    computed, then a small scalar offset is added along that direction.
-    This deforms the outline while keeping the polygon roughly star-shaped.
+    Applies Gaussian smoothing to the noise vector to create organic,
+    wavy deformations rather than jagged spikes.
     """
 
-    def __init__(self, noise_std: float = 1.0) -> None:
+    def __init__(self, noise_std: float = 1.0, smoothness: float = 2.0) -> None:
+        """Initialize the shape distortion augmenter.
+
+        Args:
+            noise_std: The magnitude of the displacement.
+            smoothness: The standard deviation of the Gaussian kernel.
+                        Higher values = smoother, larger waves.
+        """
         self.noise_std = noise_std
+        self.smoothness = smoothness
 
     def __call__(
         self, polygons: NDArray[np.float32], **kwargs
     ) -> dict[str, NDArray[np.float32]]:
+        # 1. Setup geometry
         centroids = polygons.mean(axis=1, keepdims=True)
         directions = polygons - centroids
         norms = np.linalg.norm(directions, axis=2, keepdims=True)
-        safe_norms = np.where(norms < 1e-8, 1.0, norms)
-        unit_directions = directions / safe_norms
+        unit_directions = directions / np.where(norms < 1e-8, 1.0, norms)
 
+        # 2. Generate raw white noise
         noise = np.random.normal(
-            0.0, self.noise_std, size=(polygons.shape[0], polygons.shape[1], 1)
-        ).astype(np.float32)
+            0.0, self.noise_std, size=(polygons.shape[0], polygons.shape[1])
+        )
+
+        # 3. Smooth the noise across the vertex dimension (axis 1)
+        # mode='wrap' ensures the start and end of the polygon blend smoothly
+        smoothed_noise = gaussian_filter1d(
+            noise, sigma=self.smoothness, axis=1, mode="wrap"
+        )
+
+        # 4. Reshape for broadcasting and apply
+        smoothed_noise = smoothed_noise[..., np.newaxis].astype(np.float32)
+
         return {
-            "polygons": (polygons + unit_directions * noise).astype(np.float32),
+            "polygons": (polygons + unit_directions * smoothed_noise).astype(
+                np.float32
+            ),
             **kwargs,
         }
 
