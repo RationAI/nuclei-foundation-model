@@ -27,17 +27,17 @@ class ClassificationNucleiDataset(NucleiDataset):
         comp_indices = self.find_component(seed, self.global_crop_k, graph, points)
         indices = keep_indices[comp_indices]
 
-        crop_polygons = polygons[indices]
-        crop_polygons = self.augmentation(crop_polygons)
+        augmented = self.augmentation(
+            polygons=polygons[indices], labels=labels[indices]
+        )
 
         centroids, efds = self.polygon_to_efd(
-            crop_polygons, mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
+            augmented["polygons"], mpp_x=slide.mpp_x, mpp_y=slide.mpp_y
         )
-        labels = labels[indices]
 
         return {
             "pos": centroids,
             "efds": torch.from_numpy(efds),
-            "labels": torch.from_numpy(labels > 0.5)[:, None],
+            "labels": torch.from_numpy(augmented["labels"] > 0.5)[:, None],
             "seq_len": len(centroids),
         }

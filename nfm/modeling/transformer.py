@@ -2,7 +2,6 @@ import torch
 from einops import rearrange
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
-from torchvision.ops import MLP
 
 from nfm.configuration import Config
 from nfm.modeling.layers import FeedForward, RoPE
@@ -22,6 +21,7 @@ class SelfAttention(nn.Module):
 
         self.q_norm = nn.RMSNorm(self.head_dim)
         self.k_norm = nn.RMSNorm(self.head_dim)
+        self.v_norm = nn.RMSNorm(self.head_dim, elementwise_affine=False)
 
     def forward(self, x: Tensor, pos: Tensor, block_mask: BlockMask) -> Tensor:
         q, k, v = rearrange(
@@ -29,7 +29,7 @@ class SelfAttention(nn.Module):
         )
         q = self.q_norm(q)
         k = self.k_norm(k)
-
+        v = self.v_norm(v)
         x = flex_attention(
             query=self.rope(q, pos),
             key=self.rope(k, pos),
@@ -52,13 +52,15 @@ class Layer(nn.Module):
 
         self.pre_attn_norm = nn.RMSNorm(config.dim)
         self.pre_ffn_norm = nn.RMSNorm(config.dim)
+        self.post_attn_norm = nn.RMSNorm(config.dim)
+        self.post_ffn_norm = nn.RMSNorm(config.dim)
 
     def forward(self, x: Tensor, pos: Tensor, block_mask: BlockMask) -> Tensor:
         y = self.pre_attn_norm(x)
-        x = x + self.attn(y, pos, block_mask)
+        x = x + self.post_attn_norm(self.attn(y, pos, block_mask))
 
         y = self.pre_ffn_norm(x)
-        return x + self.ffn(y)
+        return x + self.post_ffn_norm(self.ffn(y))
 
 
 class Transformer(nn.Module):
