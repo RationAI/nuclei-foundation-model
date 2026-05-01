@@ -108,5 +108,5 @@ class NFM(nn.Module):
         normalized[:seq_len] = self.bn(x[:seq_len])
         x = normalized
 
-        x = x + self.position_encoder(pos / 50000)
+        x = self.polygon_proj(x) + self.position_encoder(pos / 10000)
         return self.backbone(x[None], pos[None], block_mask).squeeze(0)
