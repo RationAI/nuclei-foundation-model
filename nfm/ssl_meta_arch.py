@@ -44,12 +44,14 @@ class SSLMetaArch(LightningModule):
         # )
 
     def forward(
-        self, x: Tensor, pos: Tensor, block_mask: BlockMask
-    ) -> tuple[Tensor, Tensor]:
-        return self.model(x, pos, block_mask)
+        self, x: Tensor, pos: Tensor, block_mask: BlockMask, seq_len: int
+    ) -> Tensor:
+        return self.model(x, pos, block_mask, seq_len)
 
     def forward_unlabeled(self, batch: dict[str, Any]) -> Tensor:
-        all_embed = self(batch["efds"], batch["pos"], batch["block_mask"])
+        seq_len = batch["seq_lens"].sum()
+        all_embed = self(batch["efds"], batch["pos"], batch["block_mask"], seq_len)
+        all_embed = all_embed[:seq_len]
 
         crops = torch.split(all_embed, batch["seq_lens"], dim=0)
         all_proj = self.batch_norm(
@@ -84,11 +86,14 @@ class SSLMetaArch(LightningModule):
 
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
         # with torch.no_grad():
-        embed = self(batch["efds"], batch["pos"], batch["block_mask"])
+        seq_len = batch["seq_lens"].sum()
+        embed = self(batch["efds"], batch["pos"], batch["block_mask"], seq_len)
+        embed = embed[:seq_len]
 
         probe_labels = self.probe(embed)
 
         probe_loss = F.binary_cross_entropy_with_logits(probe_labels, batch["labels"])
+
         self.log(
             "train/probe_loss",
             probe_loss,
@@ -105,7 +110,9 @@ class SSLMetaArch(LightningModule):
         return supervised_loss
 
     def validation_step(self, batch: dict[str, Any]) -> None:
-        embed = self(batch["efds"], batch["pos"], batch["block_mask"])
+        seq_len = batch["seq_lens"].sum()
+        embed = self(batch["efds"], batch["pos"], batch["block_mask"], seq_len)
+        embed = embed[:seq_len]
 
         probe_labels = self.probe(embed)
 

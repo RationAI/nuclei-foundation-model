@@ -3,11 +3,12 @@
 data:
   batch_size:
     train: 8
-    train_labeled: 6
+    train_labeled: 4
   num_workers:
     train: 4
     train_labeled: 6
   block_size: 128
+  total_seq_len: 16384
   k: 16
   train:
     _target_: nfm.data.datasets.NucleiDataset

@@ -20,7 +20,10 @@ from nfm.modeling.block_mask import (
 
 
 def train_collate_fn(
-    batch: list[dict[str, np.ndarray]], block_size: int, k: int
+    batch: list[dict[str, np.ndarray]],
+    block_size: int,
+    k: int,
+    total_seq_len: int | None = None,
 ) -> dict[str, Tensor | BlockMask | list[int]]:
     nbrs = NearestNeighbors(n_neighbors=k, metric="euclidean")
 
@@ -44,17 +47,29 @@ def train_collate_fn(
             all_indices.append(torch.from_numpy(b["indices"][crop][sort_indices]))
             current_global_idx += len(sorted_pos)
 
+    real_seq_len = current_global_idx
+    target_seq_len = total_seq_len or real_seq_len
+    if target_seq_len < real_seq_len:
+        raise ValueError(
+            f"total_seq_len ({target_seq_len}) must be >= packed length ({real_seq_len})"
+        )
+
     return {
-        "block_mask": create_ragged_block_quantized_knn_mask(all_knns, block_size),
-        "pos": torch.cat(all_pos),
-        "efds": torch.cat(all_efds),
+        "block_mask": create_ragged_block_quantized_knn_mask(
+            all_knns, block_size, target_seq_len
+        ),
+        "pos": _pad_to_seq_len(torch.cat(all_pos), target_seq_len),
+        "efds": _pad_to_seq_len(torch.cat(all_efds), target_seq_len),
         "all_indices": torch.cat(all_indices),
         "seq_lens": [x for b in batch for x in b["seq_lens"]],
     }
 
 
 def inference_collate_fn(
-    batch: list[dict[str, np.ndarray]], block_size: int, k: int
+    batch: list[dict[str, np.ndarray]],
+    block_size: int,
+    k: int,
+    total_seq_len: int | None = None,
 ) -> dict[str, Tensor | BlockMask]:
     nbrs = NearestNeighbors(n_neighbors=k, metric="euclidean")
 
@@ -77,13 +92,31 @@ def inference_collate_fn(
         all_labels.append(b["labels"][sort_indices])
         current_global_idx += len(sorted_pos)
 
+    real_seq_len = current_global_idx
+    target_seq_len = total_seq_len or real_seq_len
+    if target_seq_len < real_seq_len:
+        raise ValueError(
+            f"total_seq_len ({target_seq_len}) must be >= packed length ({real_seq_len})"
+        )
+
     return {
-        "block_mask": create_ragged_block_quantized_knn_mask(all_knns, block_size),
-        "pos": torch.cat(all_pos),
-        "efds": torch.cat(all_efds),
+        "block_mask": create_ragged_block_quantized_knn_mask(
+            all_knns, block_size, target_seq_len
+        ),
+        "pos": _pad_to_seq_len(torch.cat(all_pos), target_seq_len),
+        "efds": _pad_to_seq_len(torch.cat(all_efds), target_seq_len),
         "labels": torch.cat(all_labels).float(),
         "seq_lens": torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32),
     }
+
+
+def _pad_to_seq_len(x: Tensor, total_seq_len: int, value: float | int = 0) -> Tensor:
+    pad_len = total_seq_len - x.shape[0]
+    if pad_len == 0:
+        return x
+    pad_shape = (pad_len, *x.shape[1:])
+    pad = torch.full(pad_shape, value, dtype=x.dtype, device=x.device)
+    return torch.cat((x, pad), dim=0)
 
 
 class DataModule(LightningDataModule):
@@ -93,12 +126,14 @@ class DataModule(LightningDataModule):
         block_size: int,
         k: int,
         num_workers: dict[str, int],
+        total_seq_len: int | None = None,
         **datasets: DictConfig,
     ) -> None:
         super().__init__()
         self.batch_size = batch_size
         self.block_size = block_size
         self.k = k
+        self.total_seq_len = total_seq_len
         self.num_workers = num_workers
         self.datasets = datasets
 
@@ -124,7 +159,10 @@ class DataModule(LightningDataModule):
             pin_memory=True,
             in_order=False,
             collate_fn=partial(
-                inference_collate_fn, block_size=self.block_size, k=self.k
+                inference_collate_fn,
+                block_size=self.block_size,
+                k=self.k,
+                total_seq_len=self.total_seq_len,
             ),
         )
 
@@ -139,7 +177,10 @@ class DataModule(LightningDataModule):
             pin_memory=True,
             in_order=False,
             collate_fn=partial(
-                inference_collate_fn, block_size=self.block_size, k=self.k
+                inference_collate_fn,
+                block_size=self.block_size,
+                k=self.k,
+                total_seq_len=self.total_seq_len,
             ),
         )
 

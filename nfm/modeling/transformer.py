@@ -2,6 +2,7 @@ import torch
 from einops import rearrange
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
+from torchvision.ops import MLP
 
 from nfm.configuration import Config
 from nfm.modeling.layers import FeedForward, RoPE
@@ -89,10 +90,13 @@ class NFM(nn.Module):
         self.bn = nn.BatchNorm1d(4 * config.efd_order, affine=False)
         self.backbone = Transformer(config)
         self.polygon_proj = nn.Linear(4 * config.efd_order, config.dim)
+        self.position_encoder = MLP(
+            2, [config.dim, config.dim], activation_layer=nn.SiLU
+        )
 
     def forward(
-        self, x: Tensor, pos: Tensor, block_mask: BlockMask
-    ) -> tuple[Tensor, Tensor]:
+        self, x: Tensor, pos: Tensor, block_mask: BlockMask, seq_len: int
+    ) -> Tensor:
         """Forward pass of the Transformer model.
 
         Args:
@@ -100,7 +104,9 @@ class NFM(nn.Module):
             pos: Target positions of shape (n, 2)
             block_mask: Block mask for attention
         """
-        x = self.bn(x)
-        x = self.polygon_proj(x)
+        normalized = torch.zeros_like(x)
+        normalized[:seq_len] = self.bn(x[:seq_len])
+        x = normalized
 
+        x = x + self.position_encoder(pos / 50000)
         return self.backbone(x[None], pos[None], block_mask).squeeze(0)
