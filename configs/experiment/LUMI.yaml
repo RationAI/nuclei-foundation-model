@@ -33,7 +33,7 @@ data:
             - 0.85
             - 1.15
         - _target_: nfm.data.augmentations.ShapeDistortion
-          noise_std: 0.5
+          noise_std: 0.2
           smoothness: 2
         - _target_: nfm.data.augmentations.AffineSkew
           skew_range:
@@ -67,7 +67,7 @@ data:
             - 0.85
             - 1.15
         - _target_: nfm.data.augmentations.ShapeDistortion
-          noise_std: 0.5
+          noise_std: 0.2
           smoothness: 2
         - _target_: nfm.data.augmentations.AffineSkew
           skew_range:

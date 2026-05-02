@@ -35,6 +35,8 @@ class ClassificationNucleiDataset(NucleiDataset):
 
         centroids, efds = self.polygon_to_efd(augmented["polygons"])
 
+        centroids -= centroids.mean(0, keepdims=True)
+
         return {
             "pos": centroids,
             "efds": torch.from_numpy(efds),

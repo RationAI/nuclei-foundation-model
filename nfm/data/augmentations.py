@@ -162,17 +162,20 @@ class PolygonScale:
 
 
 class ShapeDistortion:
-    """Radial shape perturbation with spatial correlation.
+    """Radial shape perturbation with spatial correlation (Scale-Independent).
 
     Applies Gaussian smoothing to the noise vector to create organic,
-    wavy deformations rather than jagged spikes.
+    wavy deformations rather than jagged spikes. The distortion magnitude
+    scales proportionally with the size of each polygon.
     """
 
-    def __init__(self, noise_std: float = 1.0, smoothness: float = 2.0) -> None:
+    # Note: Default noise_std reduced to 0.1 since it is now a fraction (10%)
+    def __init__(self, noise_std: float = 0.1, smoothness: float = 2.0) -> None:
         """Initialize the shape distortion augmenter.
 
         Args:
-            noise_std: The magnitude of the displacement.
+            noise_std: The fractional magnitude of the displacement relative
+                       to the polygon's average radius (e.g., 0.1 = 10%).
             smoothness: The standard deviation of the Gaussian kernel.
                         Higher values = smoother, larger waves.
         """
@@ -188,24 +191,29 @@ class ShapeDistortion:
         norms = np.linalg.norm(directions, axis=2, keepdims=True)
         unit_directions = directions / np.where(norms < 1e-8, 1.0, norms)
 
-        # 2. Generate raw white noise
+        # 2. Calculate scale factor per polygon (Mean Radius)
+        # Shape: (N, 1, 1) to broadcast across all vertices of the respective polygon
+        polygon_scales = norms.mean(axis=1, keepdims=True)
+
+        # 3. Generate raw white noise
         noise = np.random.normal(
             0.0, self.noise_std, size=(polygons.shape[0], polygons.shape[1])
         )
 
-        # 3. Smooth the noise across the vertex dimension (axis 1)
-        # mode='wrap' ensures the start and end of the polygon blend smoothly
+        # 4. Smooth the noise across the vertex dimension (axis 1)
         smoothed_noise = gaussian_filter1d(
             noise, sigma=self.smoothness, axis=1, mode="wrap"
         )
 
-        # 4. Reshape for broadcasting and apply
+        # 5. Reshape for broadcasting
         smoothed_noise = smoothed_noise[..., np.newaxis].astype(np.float32)
 
+        # 6. Apply scale-independent perturbation
+        # Multiply by polygon_scales so the noise is relative to the polygon's size
+        perturbation = unit_directions * smoothed_noise * polygon_scales
+
         return {
-            "polygons": (polygons + unit_directions * smoothed_noise).astype(
-                np.float32
-            ),
+            "polygons": (polygons + perturbation).astype(np.float32),
             **kwargs,
         }
 
