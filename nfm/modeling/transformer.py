@@ -106,7 +106,7 @@ class NFM(nn.Module):
         """
         normalized = torch.zeros_like(x)
         normalized[:seq_len] = self.bn(x[:seq_len])
-        x = normalized
 
-        x = self.polygon_proj(x) + self.position_encoder(pos / 10000)
+        # x = self.polygon_proj(normalized) + self.position_encoder(pos / 10000)
+        x = self.position_encoder(pos / 1000)
         return self.backbone(x[None], pos[None], block_mask).squeeze(0)

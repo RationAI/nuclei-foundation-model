@@ -28,6 +28,7 @@ class SSLMetaArch(LightningModule):
 
         self.config = Config(**config)
         self.model = NFM(self.config)
+        self.model.compile()
         # self.scl = SpatialConceptLoss(self.config.dim, n_concepts)
         self.probe = nn.Linear(self.config.dim, 1)
 

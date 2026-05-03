@@ -53,7 +53,7 @@ data:
       augmentations:
         - _target_: nfm.data.augmentations.Flip
         - _target_: nfm.data.augmentations.PositionJitter
-          max_shift: 5.0
+          max_shift: 2.0
         - _target_: nfm.data.augmentations.FieldRotation
           max_angle: 3.14
         - _target_: nfm.data.augmentations.NucleiRotation
