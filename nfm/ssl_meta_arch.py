@@ -97,11 +97,10 @@ class SSLMetaArch(LightningModule):
         self.log(
             "train/probe_loss",
             probe_loss,
-            rank_zero_only=True,
             prog_bar=True,
             on_epoch=True,
-            # sync_dist=True,
-            batch_size=len(batch["seq_lens"]),
+            sync_dist=True,
+            batch_size=batch["labels"].numel(),
         )
         return probe_loss
 
@@ -121,11 +120,10 @@ class SSLMetaArch(LightningModule):
         self.log(
             "validation/probe_loss",
             probe_loss,
-            rank_zero_only=True,
             on_epoch=True,
             sync_dist=True,
             prog_bar=True,
-            batch_size=len(batch["seq_lens"]),
+            batch_size=batch["labels"].numel(),
         )
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
