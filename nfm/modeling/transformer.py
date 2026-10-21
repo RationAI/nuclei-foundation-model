@@ -5,7 +5,7 @@ from torch.nn.attention.flex_attention import BlockMask, flex_attention
 from torchvision.ops import MLP
 
 from nfm.configuration import Config
-from nfm.modeling.layers import FeedForward, RoPE
+from nfm.modeling.layers import FeedForward, RoVE
 
 
 flex_attention = torch.compile(flex_attention)
@@ -16,7 +16,7 @@ class SelfAttention(nn.Module):
         super().__init__()
         self.head_dim = dim // num_heads
 
-        self.rope = RoPE(self.head_dim, theta=rope_theta)
+        self.rope = RoVE(self.head_dim, theta=rope_theta)
         self.qkv = nn.Linear(dim, dim * 3, bias=False)
         self.wo = nn.Linear(dim, dim, bias=False)
 
@@ -34,9 +34,10 @@ class SelfAttention(nn.Module):
         x = flex_attention(
             query=self.rope(q, pos),
             key=self.rope(k, pos),
-            value=v,
+            value=self.rope(v, pos),
             block_mask=block_mask,
         )
+        x = self.rope(x, pos, inverse=True)
         x = rearrange(x, "b h n d -> b n (h d)")
 
         return self.wo(x)
@@ -107,6 +108,5 @@ class NFM(nn.Module):
         normalized = torch.zeros_like(x)
         normalized[:seq_len] = self.bn(x[:seq_len])
 
-        # x = self.polygon_proj(normalized) + self.position_encoder(pos / 10000)
-        x = self.position_encoder(pos / 1000)
+        x = self.polygon_proj(normalized)
         return self.backbone(x[None], pos[None], block_mask).squeeze(0)

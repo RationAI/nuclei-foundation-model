@@ -2,9 +2,9 @@ import heapq
 import itertools
 import random
 
+import lance
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
 from degraph import build_spatial_graph
 from numpy.typing import NDArray
 from torch.utils.data import Dataset
@@ -93,34 +93,6 @@ class NucleiDataset(Dataset[Sample]):
 
         return centroids, efd.reshape(-1, self.efd_order * 4).astype(np.float32)
 
-    def read_radial_distances(
-        self, pf: pq.ParquetFile, indices: NDArray[np.intp]
-    ) -> NDArray[np.float32]:
-        rg_lengths = [
-            pf.metadata.row_group(i).num_rows for i in range(pf.num_row_groups)
-        ]
-        rg_starts = np.concatenate(([0], np.cumsum(rg_lengths)))
-        rg_matches = np.searchsorted(rg_starts, indices, side="right") - 1
-        unique_rgs = np.unique(rg_matches)
-
-        radial_table = pf.read_row_groups(unique_rgs, columns=["radial_distances"])
-
-        read_rg_lengths = [rg_lengths[i] for i in unique_rgs]
-        new_rg_starts = np.concatenate(([0], np.cumsum(read_rg_lengths)[:-1]))
-
-        rg_lookup = np.zeros(pf.num_row_groups, dtype=np.int64)
-        rg_lookup[unique_rgs] = new_rg_starts
-
-        indices_in_new = indices - rg_starts[rg_matches] + rg_lookup[rg_matches]
-
-        return (
-            radial_table["radial_distances"]
-            .take(indices_in_new)
-            .combine_chunks()
-            .values.to_numpy()
-            .reshape(-1, 64)
-        )
-
     def downsample_points(
         self, points: NDArray[np.float32], limit: int
     ) -> tuple[NDArray[np.float32], NDArray[np.intp]]:
@@ -174,16 +146,33 @@ class NucleiDataset(Dataset[Sample]):
 
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
-        pf = pq.ParquetFile(
-            f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}/nuclei.parquet"
+        ds = lance.dataset(
+            f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}.lance"
         )
-        points_col = pf.read(columns=["points"])["points"].combine_chunks()
-        points = points_col.values.to_numpy().reshape(-1, 2).astype(np.float32)
+        table = ds.to_table(
+            nearest={
+                "column": "points",
+                "q": ds.sample(1, columns=["points"])["points"][0],
+                "k": int(self.n_global_crops * self.global_crop_k / (1 - self.alpha)),
+                "metric": "euclidean",
+            },
+            disable_scoring_autoprojection=True,
+        )
 
-        points, keep_indices = self.downsample_points(
-            points,
-            limit=int(self.n_global_crops * self.global_crop_k / (1 - self.alpha)),
+        points = (
+            table["points"]
+            .combine_chunks()
+            .values.to_numpy(zero_copy_only=False)
+            .reshape(-1, 2)
         )
+
+        radial_distances = (
+            table["radial_distances"]
+            .combine_chunks()
+            .values.to_numpy(zero_copy_only=False)
+            .reshape(-1, 64)
+        )
+
         graph = build_spatial_graph(points)
 
         global_crops_indices, local_crops_indices, all_indices = self.sample_crops(
@@ -191,8 +180,7 @@ class NucleiDataset(Dataset[Sample]):
         )
 
         polygons = self.radial_to_polygon(
-            points[all_indices],
-            self.read_radial_distances(pf, keep_indices[all_indices]),
+            points[all_indices], radial_distances[all_indices]
         )
 
         polygons[..., 0] *= slide.mpp_x

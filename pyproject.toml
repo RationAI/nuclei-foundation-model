@@ -12,13 +12,17 @@ dependencies = [
     "rationai-mlkit>=0.2.0",
     "psutil>=7.0.0",
     "einops>=0.8.1",
-    "transformers<5.0.0",
     "deepspeed>=0.17.2",
     "degraph",
+    "jax>=0.4.30",
     "ratiopath>=1.0.1",
     "pandas>=2.3.3",
     "lejepa",
     "torchvision>=0.24.1",
+    "daft>=0.7.14",
+    "lance>=1.2.1",
+    "pylance>=6.0.1",
+    "transformers>=5.20.2",
 ]
 
 [dependency-groups]

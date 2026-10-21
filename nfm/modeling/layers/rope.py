@@ -1,50 +1,56 @@
 import torch
-from einops import rearrange, repeat
+from einops import rearrange
 from torch import Tensor, nn
-from torch.nn.utils.parametrizations import orthogonal
 
 
-class RoPE(nn.Module):
-    """Implements the N dimensional RoPE positional encoding.
+class RoVE(nn.Module):
+    """N-dimensional Rotary Value Embeddings (RoVE).
 
-    Applies RoPE-Mixed on input under learnable orthogonal transformation P.
+    Uses learnable RoPE-Mixed frequencies and applies inverse RoPE
+    to the output of attention.
 
-    Reference:
-        - "Learning the RoPEs: Better 2D and 3D Position Encodings with STRING" (https://arxiv.org/abs/2502.02562)
-        - "Rethinking RoPE: A Mathematical Blueprint for N-dimensional Rotary Positional Embedding" (https://arxiv.org/abs/2504.06308)
+    References:
+        - RoVE: https://arxiv.org/abs/2606.11275
+        - N-dimensional RoPE: https://arxiv.org/abs/2504.06308
     """
 
     def __init__(self, dim: int, pos_dim: int = 2, theta: float = 100.0) -> None:
-        """Initialize RoPE module.
-
-        Args:
-            dim: The feature dimension of the input tensor. Must be even.
-            pos_dim: The dimensionality of the position vectors (e.g., 1 for 1D, 2 for 2D).
-            theta: The base value for the RoPE frequency calculation.
-        """
         super().__init__()
+        assert dim % 2 == 0, "Feature dimension must be even."
+
         freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
-        self.freqs = nn.Parameter(repeat(freqs, "d -> p d", p=pos_dim).clone())
-        self.P = orthogonal(
-            nn.Linear(dim, dim, bias=False), orthogonal_map="householder"
+        angles = 2 * torch.pi * torch.rand_like(freqs)
+        self.freqs = nn.Parameter(
+            torch.stack((freqs * angles.cos(), freqs * angles.sin()))
         )
 
-    @torch.autocast("cuda", dtype=torch.float32)
-    def forward(self, x: Tensor, positions: Tensor) -> Tensor:
-        """Apply RoPE positional encoding.
+    def forward(self, x: Tensor, positions: Tensor, inverse: bool = False) -> Tensor:
+        """Apply forward or inverse RoPE.
 
         Args:
-            x ([b, h, n, d]): Input tensor.
-            positions ([b, n, pos_dim]): Positions tensor.
-        """
-        px = self.P(x.float())
+            x: Tensor [b, h, n, d].
+            positions: Tensor [b, n, pos_dim].
+            inverse: Whether to apply the inverse rotation.
 
-        # apply RoPE-Mixed
-        freqs = positions.to(self.freqs) @ self.freqs
+        Returns:
+            Rotated tensor [b, h, n, d].
+        """
+        with torch.autocast(device_type=positions.device.type, enabled=False):
+            freqs = positions.float() @ self.freqs.float()
+
+        if inverse:
+            freqs = -freqs
+
         freqs_cis = rearrange(
             torch.polar(torch.ones_like(freqs), freqs), "b n c -> b 1 n c"
         )
-        px_ = torch.view_as_complex(rearrange(px, "... (d two) -> ... d two", two=2))
-        out = rearrange(torch.view_as_real(px_ * freqs_cis), "... d two -> ... (d two)")
 
-        return out.to(x)
+        x_complex = torch.view_as_complex(
+            rearrange(x.float(), "... (d two) -> ... d two", two=2).contiguous()
+        )
+
+        out = rearrange(
+            torch.view_as_real(x_complex * freqs_cis), "... d two -> ... (d two)"
+        )
+
+        return out.to(x.dtype)

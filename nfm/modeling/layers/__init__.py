@@ -1,5 +1,5 @@
 from nfm.modeling.layers.ffn import FeedForward
-from nfm.modeling.layers.rope import RoPE
+from nfm.modeling.layers.rope import RoVE
 
 
-__all__ = ["FeedForward", "RoPE"]
+__all__ = ["FeedForward", "RoVE"]

@@ -47,12 +47,12 @@ class SSLMetaArch(LightningModule):
     def forward(
         self, x: Tensor, pos: Tensor, block_mask: BlockMask, seq_len: int
     ) -> Tensor:
-        return self.model(x, pos, block_mask, seq_len)
+        return self.model(x, pos, block_mask, seq_len)[:seq_len]
 
     def forward_unlabeled(self, batch: dict[str, Any]) -> Tensor:
-        seq_len = batch["seq_lens"].sum()
-        all_embed = self(batch["efds"], batch["pos"], batch["block_mask"], seq_len)
-        all_embed = all_embed[:seq_len]
+        all_embed = self(
+            batch["efds"], batch["pos"], batch["block_mask"], batch["seq_lens"].sum()
+        )
 
         crops = torch.split(all_embed, batch["seq_lens"], dim=0)
         all_proj = self.batch_norm(
@@ -87,9 +87,9 @@ class SSLMetaArch(LightningModule):
 
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
         # with torch.no_grad():
-        seq_len = batch["seq_lens"].sum()
-        embed = self(batch["efds"], batch["pos"], batch["block_mask"], seq_len)
-        embed = embed[:seq_len]
+        embed = self(
+            batch["efds"], batch["pos"], batch["block_mask"], batch["seq_lens"].sum()
+        )
 
         probe_labels = self.probe(embed)
 
@@ -111,9 +111,9 @@ class SSLMetaArch(LightningModule):
         return supervised_loss
 
     def validation_step(self, batch: dict[str, Any]) -> None:
-        seq_len = batch["seq_lens"].sum()
-        embed = self(batch["efds"], batch["pos"], batch["block_mask"], seq_len)
-        embed = embed[:seq_len]
+        embed = self(
+            batch["efds"], batch["pos"], batch["block_mask"], batch["seq_lens"].sum()
+        )
 
         probe_labels = self.probe(embed)
 
