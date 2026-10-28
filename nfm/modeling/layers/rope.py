@@ -1,5 +1,4 @@
 import torch
-from einops import rearrange
 from torch import Tensor, nn
 
 
@@ -41,16 +40,12 @@ class RoVE(nn.Module):
         if inverse:
             freqs = -freqs
 
-        freqs_cis = rearrange(
-            torch.polar(torch.ones_like(freqs), freqs), "b n c -> b 1 n c"
-        )
-
-        x_complex = torch.view_as_complex(
-            rearrange(x.float(), "... (d two) -> ... d two", two=2).contiguous()
-        )
-
-        out = rearrange(
-            torch.view_as_real(x_complex * freqs_cis), "... d two -> ... (d two)"
-        )
-
+        cos = freqs.cos()[:, None]
+        sin = freqs.sin()[:, None]
+        x_float = x.float()
+        real = x_float[..., 0::2]
+        imag = x_float[..., 1::2]
+        out = torch.stack(
+            (real * cos - imag * sin, real * sin + imag * cos), dim=-1
+        ).flatten(-2)
         return out.to(x.dtype)

@@ -109,7 +109,7 @@ class SSLMetaArch(LightningModule):
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
         # with torch.no_grad():
         embed = self(
-            batch["efds"], batch["pos"], batch["block_mask"], batch["seq_lens"].sum()
+            batch["efds"], batch["pos"], batch["block_mask"], batch["labels"].shape[0]
         )
 
         probe_labels = self.probe(embed)
@@ -133,7 +133,7 @@ class SSLMetaArch(LightningModule):
 
     def validation_step(self, batch: dict[str, Any]) -> None:
         embed = self(
-            batch["efds"], batch["pos"], batch["block_mask"], batch["seq_lens"].sum()
+            batch["efds"], batch["pos"], batch["block_mask"], batch["labels"].shape[0]
         )
 
         probe_labels = self.probe(embed)
