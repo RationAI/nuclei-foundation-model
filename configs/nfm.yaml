@@ -21,6 +21,6 @@ trainer:
       mode: min
 
 model:
-  warmup_steps: 100
+  warmup_steps: 1000
   lamb: 0.2
   n_concepts: 256

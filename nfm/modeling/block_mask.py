@@ -1,4 +1,6 @@
 import math
+from copy import copy
+from typing import Self
 
 import numpy as np
 import torch
@@ -18,13 +20,14 @@ class _MaskMod(nn.Module):
 
 
 class BlockMask(torch.nn.attention.flex_attention.BlockMask):
-    def to(self, device: torch.device | str) -> "BlockMask":
-        mapped_attributes = tree_map_only(
+    def to(self, device: torch.device | str) -> Self:
+        moved = copy(self)
+        moved.__dict__ = tree_map_only(
             torch.Tensor | _MaskMod,
             lambda x: x.to(device),
-            self.as_tuple(flatten=False),
+            self.__dict__,
         )
-        return BlockMask(*mapped_attributes)
+        return moved
 
 
 def create_ragged_block_quantized_knn_mask(
