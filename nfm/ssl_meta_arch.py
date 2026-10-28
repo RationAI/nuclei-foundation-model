@@ -121,7 +121,6 @@ class SSLMetaArch(LightningModule):
             probe_loss,
             prog_bar=True,
             on_epoch=True,
-            sync_dist=True,
             batch_size=batch["labels"].numel(),
         )
         return probe_loss
