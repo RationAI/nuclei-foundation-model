@@ -58,7 +58,10 @@ def train_collate_fn(
 
 
 def inference_collate_fn(
-    batch: list[dict[str, np.ndarray]], block_size: int, k: int, total_seq_len: int
+    batch: list[dict[str, np.ndarray]],
+    block_size: int,
+    k: int,
+    total_seq_len: int | None = None,
 ) -> dict[str, Tensor | BlockMask]:
     nbrs = NearestNeighbors(n_neighbors=k, metric="euclidean")
 
@@ -82,6 +85,11 @@ def inference_collate_fn(
         all_efds.append(b["efds"][sort_indices])
         all_labels.append(b["labels"][sort_indices])
         current_global_idx += len(sorted_pos)
+
+    if total_seq_len is None:
+        total_seq_len = (
+            (current_global_idx + block_size - 1) // block_size
+        ) * block_size
 
     return {
         "block_mask": create_ragged_block_quantized_knn_mask(
@@ -118,19 +126,21 @@ class DataModule(LightningDataModule):
     def setup(self, stage: str) -> None:
         labeled = self.datasets.labeled
         slides = pd.read_parquet(labeled.slides_path)
-        slides = slides[slides["nuclei_count"] >= labeled.dataset.crop_size]
         train, validation = train_test_split(
             slides,
             test_size=labeled.split_size,
             stratify=slides[labeled.split_stratify_col],
         )
-        self.validation = instantiate(labeled.dataset, slides=validation)
+        self.validation = instantiate(
+            labeled.dataset, slides=validation, crop_size=None
+        )
         if stage == "fit":
             if "unlabeled" in self.datasets:
                 self.train = instantiate(
                     self.datasets.unlabeled.dataset,
                     slides=pd.read_parquet(self.datasets.unlabeled.slides_path),
                 )
+            train = train[train["nuclei_count"] >= labeled.dataset.crop_size]
             self.train_labeled = instantiate(labeled.dataset, slides=train)
 
     def train_dataloader(self) -> Iterable[dict[str, Tensor]]:
@@ -189,15 +199,15 @@ class DataModule(LightningDataModule):
         cfg = self.datasets.labeled
         return DataLoader(
             self.validation,
-            batch_size=cfg.batch_size,
-            num_workers=cfg.num_workers,
-            persistent_workers=cfg.num_workers > 0,
+            batch_size=1,
+            num_workers=cfg.eval_num_workers,
+            persistent_workers=cfg.eval_num_workers > 0,
             pin_memory=True,
             in_order=False,
             collate_fn=partial(
                 inference_collate_fn,
                 block_size=self.block_size,
                 k=self.k,
-                total_seq_len=cfg.total_seq_len,
+                total_seq_len=None,
             ),
         )

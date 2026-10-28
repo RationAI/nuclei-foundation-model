@@ -16,7 +16,7 @@ trainer:
       _target_: lightning.pytorch.callbacks.ModelCheckpoint
       save_top_k: 1
       save_last: true
-      every_n_epochs: 50
+      every_n_epochs: 5
       monitor: validation/probe_loss
       mode: min
 
