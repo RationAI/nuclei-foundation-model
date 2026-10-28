@@ -1,9 +1,9 @@
 from typing import Any
 
-from transformers import PretrainedConfig
+from transformers import PreTrainedConfig
 
 
-class Config(PretrainedConfig):
+class Config(PreTrainedConfig):
     model_type = "nfm"
 
     def __init__(
