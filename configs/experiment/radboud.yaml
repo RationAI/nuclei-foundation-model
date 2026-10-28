@@ -33,7 +33,7 @@ data:
         pos_slide_ratio: 0.75
       dataset:
         _target_: nfm.data.datasets.ClassificationNucleiDataset
-        annotation_path: /mnt/projects/nuclei_based_wsi_analysis/nuclei_supervision/PANDA/Radboud/annotation
+        annotation_path: /mnt/public_projects/nuclei_based_wsi_analysis/nuclei_supervision/PANDA/Radboud/annotation
         crop_size: 4096
         alpha: 0.8
         efd_order: 16
