@@ -1697,6 +1697,7 @@ dependencies = [
     { name = "torch" },
     { name = "torchmetrics" },
     { name = "torchvision" },
+    { name = "tqdm" },
     { name = "transformers" },
 ]
 
@@ -1724,6 +1725,7 @@ requires-dist = [
     { name = "torch", specifier = ">=2.9.0" },
     { name = "torchmetrics", specifier = ">=1.4.1" },
     { name = "torchvision", specifier = ">=0.24.1" },
+    { name = "tqdm", specifier = ">=4.70.1" },
     { name = "transformers", specifier = ">=5.20.2" },
 ]
 

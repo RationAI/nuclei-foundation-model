@@ -22,10 +22,10 @@ data:
       slides_path: mlflow-artifacts:/37/5b9c6f096026425fa2b04c4e74b7a6f3/artifacts/panda/slides_mapping_train.parquet
       split_size: 0.1
       split_stratify_col: gleason_score
-      batch_size: 16
-      num_workers: 10
-      eval_num_workers: 2
-      total_seq_len: 65536 # batch_size * crop_size
+      batch_size: 32
+      num_workers: 18
+      eval_num_workers: 16
+      total_seq_len: 131072 # batch_size * crop_size
       sampler:
         _target_: nfm.data.samplers.AutoWeightedRandomSampler
         positivity_thr: 0.05

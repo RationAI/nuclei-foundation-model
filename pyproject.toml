@@ -21,6 +21,7 @@ dependencies = [
     "pylance>=6.0.1",
     "transformers>=5.20.2",
     "nvidia-ml-py>=13.615.71",
+    "tqdm>=4.70.1",
 ]
 
 [dependency-groups]
