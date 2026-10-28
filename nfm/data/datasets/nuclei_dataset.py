@@ -19,7 +19,7 @@ type Sample = dict[str, list[np.ndarray] | int | list[int]]
 class NucleiDataset(Dataset[Sample]):
     def __init__(
         self,
-        slides_path: str,
+        slides: pd.DataFrame,
         nuclei_path: str,
         global_crop_k: int = 4096,
         local_crop_k: int = 512,
@@ -29,9 +29,7 @@ class NucleiDataset(Dataset[Sample]):
         efd_order: int = 16,
         augmentation: Compose | None = None,
     ) -> None:
-        self.slides = pd.read_parquet(
-            slides_path, columns=["id", "mpp_x", "mpp_y", "dataset", "organ"]
-        )
+        self.slides = slides.reset_index(drop=True)
         self.nuclei_path = nuclei_path
         self.global_crop_k = global_crop_k
         self.local_crop_k = local_crop_k

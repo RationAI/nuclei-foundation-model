@@ -2,11 +2,14 @@ from collections.abc import Iterable
 from functools import partial
 
 import numpy as np
+import pandas as pd
 import torch
 from hydra.utils import instantiate
 from lightning import LightningDataModule
 from lightning.pytorch.utilities import CombinedLoader
+from mlflow.artifacts import download_artifacts
 from omegaconf import DictConfig
+from sklearn.model_selection import train_test_split
 from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
 from torch.nn.attention.flex_attention import BlockMask
@@ -70,7 +73,9 @@ def inference_collate_fn(
             b["pos"], block_size, global_offset=current_global_idx
         )
         sorted_pos = b["pos"][sort_indices]
-        _, knn = nbrs.fit(sorted_pos).kneighbors(sorted_pos)
+        _, knn = nbrs.fit(sorted_pos).kneighbors(
+            sorted_pos, n_neighbors=min(k, len(sorted_pos))
+        )
 
         all_pos.append(torch.from_numpy(sorted_pos))
         all_knns.append(torch.from_numpy(knn))
@@ -89,7 +94,7 @@ def inference_collate_fn(
     }
 
 
-def _pad_to_seq_len(x: Tensor, total_seq_len: int, value: float | int = 0) -> Tensor:
+def _pad_to_seq_len(x: Tensor, total_seq_len: int, value: float = 0) -> Tensor:
     pad_len = total_seq_len - x.shape[0]
     if pad_len == 0:
         return x
@@ -99,64 +104,98 @@ def _pad_to_seq_len(x: Tensor, total_seq_len: int, value: float | int = 0) -> Te
 
 
 class DataModule(LightningDataModule):
-    def __init__(
-        self,
-        batch_size: dict[str, int],
-        block_size: int,
-        k: int,
-        num_workers: dict[str, int],
-        total_seq_len: dict[str, int],
-        **datasets: DictConfig,
-    ) -> None:
+    def __init__(self, datasets: DictConfig, block_size: int, k: int) -> None:
         super().__init__()
-        self.batch_size = batch_size
         self.block_size = block_size
         self.k = k
-        self.total_seq_len = total_seq_len
-        self.num_workers = num_workers
         self.datasets = datasets
 
+    def prepare_data(self) -> None:
+        for dataset in self.datasets.values():
+            if dataset.slides_path.startswith("mlflow-artifacts:"):
+                dataset.slides_path = download_artifacts(dataset.slides_path)
+
     def setup(self, stage: str) -> None:
-        match stage:
-            case "fit":
-                self.train = instantiate(self.datasets["train"])
-                self.train_labeled = instantiate(self.datasets["train_labeled"])
+        labeled = self.datasets.labeled
+        slides = pd.read_parquet(labeled.slides_path)
+        slides = slides[slides["nuclei_count"] >= labeled.dataset.crop_size]
+        train, validation = train_test_split(
+            slides, test_size=labeled.split_size, stratify=slides["is_carcinoma"]
+        )
+        self.validation = instantiate(labeled.dataset, slides=validation)
+        if stage == "fit":
+            if "unlabeled" in self.datasets:
+                self.train = instantiate(
+                    self.datasets.unlabeled.dataset,
+                    slides=pd.read_parquet(self.datasets.unlabeled.slides_path),
+                )
+            self.train_labeled = instantiate(labeled.dataset, slides=train)
 
     def train_dataloader(self) -> Iterable[dict[str, Tensor]]:
+        cfg = self.datasets.labeled
+        sampler = instantiate(cfg.sampler, dataset=self.train_labeled)
+        labeled = DataLoader(
+            self.train_labeled,
+            batch_size=cfg.batch_size,
+            sampler=sampler,
+            drop_last=True,
+            num_workers=cfg.num_workers,
+            persistent_workers=cfg.num_workers > 0,
+            pin_memory=True,
+            in_order=False,
+            collate_fn=partial(
+                inference_collate_fn,
+                block_size=self.block_size,
+                k=self.k,
+                total_seq_len=cfg.total_seq_len,
+            ),
+        )
+        if "unlabeled" not in self.datasets:
+            return labeled
+
+        cfg = self.datasets.unlabeled
+        sampler = (
+            instantiate(cfg.sampler, dataset=self.train)
+            if cfg.get("sampler") is not None
+            else None
+        )
         return CombinedLoader(
             {
                 "unlabeled": DataLoader(
                     self.train,
-                    batch_size=self.batch_size["train"],
-                    shuffle=True,
+                    batch_size=cfg.batch_size,
+                    sampler=sampler,
+                    shuffle=sampler is None,
                     drop_last=True,
-                    num_workers=self.num_workers["train"],
-                    persistent_workers=True,
+                    num_workers=cfg.num_workers,
+                    persistent_workers=cfg.num_workers > 0,
                     pin_memory=True,
                     in_order=False,
                     collate_fn=partial(
                         train_collate_fn,
                         block_size=self.block_size,
                         k=self.k,
-                        total_seq_len=self.total_seq_len["train"],
+                        total_seq_len=cfg.total_seq_len,
                     ),
                 ),
-                "labeled": DataLoader(
-                    self.train_labeled,
-                    batch_size=self.batch_size["train_labeled"],
-                    shuffle=True,
-                    drop_last=True,
-                    num_workers=self.num_workers["train_labeled"],
-                    persistent_workers=True,
-                    pin_memory=True,
-                    in_order=False,
-                    collate_fn=partial(
-                        inference_collate_fn,
-                        block_size=self.block_size,
-                        k=self.k,
-                        total_seq_len=self.total_seq_len["train_labeled"],
-                    ),
-                ),
+                "labeled": labeled,
             },
             mode="max_size_cycle",
+        )
+
+    def val_dataloader(self) -> Iterable[dict[str, Tensor]]:
+        cfg = self.datasets.labeled
+        return DataLoader(
+            self.validation,
+            batch_size=cfg.batch_size,
+            num_workers=cfg.num_workers,
+            persistent_workers=cfg.num_workers > 0,
+            pin_memory=True,
+            in_order=False,
+            collate_fn=partial(
+                inference_collate_fn,
+                block_size=self.block_size,
+                k=self.k,
+                total_seq_len=cfg.dataset.crop_size,
+            ),
         )

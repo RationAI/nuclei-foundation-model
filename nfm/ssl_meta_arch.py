@@ -1,6 +1,5 @@
 from typing import Any
 
-import lejepa
 import torch
 import torch.nn.functional as F
 from einops import rearrange
@@ -9,7 +8,13 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
-from torchvision.ops import MLP
+from torchmetrics import MetricCollection
+from torchmetrics.classification import (
+    BinaryAUROC,
+    BinaryAveragePrecision,
+    BinaryPrecision,
+    BinaryRecall,
+)
 
 from nfm.configuration import Config
 from nfm.modeling.transformer import NFM
@@ -20,10 +25,16 @@ from nfm.modeling.transformer import NFM
 
 class SSLMetaArch(LightningModule):
     def __init__(
-        self, warmup_steps: int, lamb: float, n_concepts: int, **config: Any
+        self,
+        warmup_steps: int,
+        lamb: float,
+        n_concepts: int,
+        lr: float = 0.0005,
+        **config: Any,
     ) -> None:
         super().__init__()
         self.warmup_steps = warmup_steps
+        self.lr = lr
         self.lamb = lamb
 
         self.config = Config(**config)
@@ -43,6 +54,16 @@ class SSLMetaArch(LightningModule):
         # self.sigreg_loss = lejepa.multivariate.SlicingUnivariateTest(
         #     univariate_test=univariate_test, num_slices=1024
         # )
+
+        self.val_metrics = MetricCollection(
+            {
+                "precision": BinaryPrecision(),
+                "recall": BinaryRecall(),
+                "AUROC": BinaryAUROC(),
+                "AUPRC": BinaryAveragePrecision(),
+            },
+            prefix="validation/",
+        )
 
     def forward(
         self, x: Tensor, pos: Tensor, block_mask: BlockMask, seq_len: int
@@ -107,7 +128,7 @@ class SSLMetaArch(LightningModule):
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         # unsupervised_loss = self.forward_unlabeled(batch["unlabeled"])
-        supervised_loss = self.forward_labeled(batch)
+        supervised_loss = self.forward_labeled(batch.get("labeled", batch))
         return supervised_loss
 
     def validation_step(self, batch: dict[str, Any]) -> None:
@@ -118,6 +139,7 @@ class SSLMetaArch(LightningModule):
         probe_labels = self.probe(embed)
 
         probe_loss = F.binary_cross_entropy_with_logits(probe_labels, batch["labels"])
+        self.val_metrics(torch.sigmoid(probe_labels), batch["labels"])
         self.log(
             "validation/probe_loss",
             probe_loss,
@@ -125,6 +147,9 @@ class SSLMetaArch(LightningModule):
             sync_dist=True,
             prog_bar=True,
             batch_size=batch["labels"].numel(),
+        )
+        self.log_dict(
+            self.val_metrics, on_epoch=True, batch_size=batch["labels"].numel()
         )
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
@@ -137,7 +162,7 @@ class SSLMetaArch(LightningModule):
             {"params": no_decay_params, "weight_decay": 0},
         ]
 
-        optimizer = torch.optim.AdamW(params, lr=0.0005, weight_decay=0.05)
+        optimizer = torch.optim.AdamW(params, lr=self.lr, weight_decay=0.05)
 
         s1 = LinearLR(optimizer, start_factor=0.01, total_iters=self.warmup_steps)
         s2 = CosineAnnealingLR(

@@ -104,6 +104,7 @@ class NFM(nn.Module):
             x: Target sequence of shape (n, d)
             pos: Target positions of shape (n, 2)
             block_mask: Block mask for attention
+            seq_len: Length of the target sequence
         """
         normalized = torch.zeros_like(x)
         normalized[:seq_len] = self.bn(x[:seq_len])
