@@ -139,7 +139,7 @@ class SSLMetaArch(LightningModule):
         probe_labels = self.probe(embed)
 
         probe_loss = F.binary_cross_entropy_with_logits(probe_labels, batch["labels"])
-        self.val_metrics(torch.sigmoid(probe_labels), batch["labels"])
+        self.val_metrics(torch.sigmoid(probe_labels), batch["labels"].long())
         self.log(
             "validation/probe_loss",
             probe_loss,

@@ -120,7 +120,9 @@ class DataModule(LightningDataModule):
         slides = pd.read_parquet(labeled.slides_path)
         slides = slides[slides["nuclei_count"] >= labeled.dataset.crop_size]
         train, validation = train_test_split(
-            slides, test_size=labeled.split_size, stratify=slides["is_carcinoma"]
+            slides,
+            test_size=labeled.split_size,
+            stratify=slides[labeled.split_stratify_col],
         )
         self.validation = instantiate(labeled.dataset, slides=validation)
         if stage == "fit":
@@ -196,6 +198,6 @@ class DataModule(LightningDataModule):
                 inference_collate_fn,
                 block_size=self.block_size,
                 k=self.k,
-                total_seq_len=cfg.dataset.crop_size,
+                total_seq_len=cfg.total_seq_len,
             ),
         )
