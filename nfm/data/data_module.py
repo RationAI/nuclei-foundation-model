@@ -50,10 +50,8 @@ def train_collate_fn(
         "block_mask": create_ragged_block_quantized_knn_mask(
             all_knns, block_size, None
         ),
-        # "pos": _pad_to_seq_len(torch.cat(all_pos), total_seq_len),
-        # "efds": _pad_to_seq_len(torch.cat(all_efds), total_seq_len),
-        "pos": torch.cat(all_pos),
-        "efds": torch.cat(all_efds),
+        "pos": _pad_to_seq_len(torch.cat(all_pos), total_seq_len),
+        "efds": _pad_to_seq_len(torch.cat(all_efds), total_seq_len),
         "all_indices": torch.cat(all_indices),
         "seq_lens": [x for b in batch for x in b["seq_lens"]],
     }
@@ -63,7 +61,7 @@ def inference_collate_fn(
     batch: list[dict[str, np.ndarray]],
     block_size: int,
     k: int,
-    total_seq_len: int | None = None,
+    total_seq_len: int,
 ) -> dict[str, Tensor | BlockMask]:
     nbrs = NearestNeighbors(n_neighbors=k, metric="euclidean")
 
@@ -92,10 +90,8 @@ def inference_collate_fn(
         "block_mask": create_ragged_block_quantized_knn_mask(
             all_knns, block_size, None
         ),
-        # "pos": _pad_to_seq_len(torch.cat(all_pos), total_seq_len),
-        # "efds": _pad_to_seq_len(torch.cat(all_efds), total_seq_len),
-        "pos": torch.cat(all_pos),
-        "efds": torch.cat(all_efds),
+        "pos": _pad_to_seq_len(torch.cat(all_pos), total_seq_len),
+        "efds": _pad_to_seq_len(torch.cat(all_efds), total_seq_len),
         "labels": torch.cat(all_labels).float(),
         "seq_lens": torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32),
     }
@@ -203,6 +199,9 @@ class DataModule(LightningDataModule):
             pin_memory=True,
             in_order=False,
             collate_fn=partial(
-                inference_collate_fn, block_size=self.block_size, k=self.k
+                inference_collate_fn,
+                block_size=self.block_size,
+                k=self.k,
+                total_seq_len=cfg.total_seq_len,
             ),
         )
