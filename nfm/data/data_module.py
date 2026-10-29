@@ -123,6 +123,7 @@ class DataModule(LightningDataModule):
     def setup(self, stage: str) -> None:
         labeled = self.datasets.labeled
         slides = pd.read_parquet(labeled.slides_path)
+        slides = slides[slides["nuclei_count"] >= 512]
         train, validation = train_test_split(
             slides,
             test_size=labeled.split_size,
