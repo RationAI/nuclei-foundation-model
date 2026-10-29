@@ -9,7 +9,7 @@ from nfm.configuration import Config
 from nfm.modeling.layers import FeedForward, RoVE
 
 
-flex_attention = torch.compile(flex_attention)
+flex_attention = torch.compile(flex_attention, dynamic=True)
 
 
 class SelfAttention(nn.Module):
