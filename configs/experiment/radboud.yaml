@@ -16,11 +16,11 @@ trainer:
 
 data:
   block_size: 128
-  k: 12
+  k: 24
   datasets:
     labeled:
       slides_path: mlflow-artifacts:/37/5b9c6f096026425fa2b04c4e74b7a6f3/artifacts/panda/slides_mapping_train.parquet
-      split_size: 0.1
+      split_size: 0.2
       split_stratify_col: gleason_score
       batch_size: 32
       num_workers: 16
