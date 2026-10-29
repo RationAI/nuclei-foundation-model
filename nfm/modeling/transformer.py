@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
@@ -31,12 +32,12 @@ class SelfAttention(nn.Module):
         q = self.q_norm(q)
         k = self.k_norm(k)
         v = self.v_norm(v)
-        x = flex_attention(
-            query=self.rope(q, pos),
-            key=self.rope(k, pos),
-            value=self.rope(v, pos),
-            block_mask=block_mask,
-        )
+        q, k, v = self.rope(q, pos), self.rope(k, pos), self.rope(v, pos)
+        if isinstance(block_mask, Tensor):
+            # Explicit small-sequence reference backend for CPU checks.
+            x = F.scaled_dot_product_attention(q, k, v, attn_mask=block_mask)
+        else:
+            x = flex_attention(query=q, key=k, value=v, block_mask=block_mask)
         x = self.rope(x, pos, inverse=True)
         x = rearrange(x, "b h n d -> b n (h d)")
 

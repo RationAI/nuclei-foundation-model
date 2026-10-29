@@ -48,17 +48,22 @@ def train_collate_fn(
 
     return {
         "block_mask": create_ragged_block_quantized_knn_mask(
-            all_knns, block_size, total_seq_len
+            all_knns, block_size, None
         ),
-        "pos": _pad_to_seq_len(torch.cat(all_pos), total_seq_len),
-        "efds": _pad_to_seq_len(torch.cat(all_efds), total_seq_len),
+        # "pos": _pad_to_seq_len(torch.cat(all_pos), total_seq_len),
+        # "efds": _pad_to_seq_len(torch.cat(all_efds), total_seq_len),
+        "pos": torch.cat(all_pos),
+        "efds": torch.cat(all_efds),
         "all_indices": torch.cat(all_indices),
         "seq_lens": [x for b in batch for x in b["seq_lens"]],
     }
 
 
 def inference_collate_fn(
-    batch: list[dict[str, np.ndarray]], block_size: int, k: int, total_seq_len: int
+    batch: list[dict[str, np.ndarray]],
+    block_size: int,
+    k: int,
+    total_seq_len: int | None = None,
 ) -> dict[str, Tensor | BlockMask]:
     nbrs = NearestNeighbors(n_neighbors=k, metric="euclidean")
 
@@ -85,16 +90,20 @@ def inference_collate_fn(
 
     return {
         "block_mask": create_ragged_block_quantized_knn_mask(
-            all_knns, block_size, total_seq_len
+            all_knns, block_size, None
         ),
-        "pos": _pad_to_seq_len(torch.cat(all_pos), total_seq_len),
-        "efds": _pad_to_seq_len(torch.cat(all_efds), total_seq_len),
+        # "pos": _pad_to_seq_len(torch.cat(all_pos), total_seq_len),
+        # "efds": _pad_to_seq_len(torch.cat(all_efds), total_seq_len),
+        "pos": torch.cat(all_pos),
+        "efds": torch.cat(all_efds),
         "labels": torch.cat(all_labels).float(),
         "seq_lens": torch.tensor([b["seq_len"] for b in batch], dtype=torch.int32),
     }
 
 
-def _pad_to_seq_len(x: Tensor, total_seq_len: int, value: float = 0) -> Tensor:
+def _pad_to_seq_len(x: Tensor, total_seq_len: int | None, value: float = 0) -> Tensor:
+    if total_seq_len is None:
+        return x
     pad_len = total_seq_len - x.shape[0]
     if pad_len == 0:
         return x
@@ -189,15 +198,12 @@ class DataModule(LightningDataModule):
         cfg = self.datasets.labeled
         return DataLoader(
             self.validation,
-            batch_size=cfg.batch_size,
+            batch_size=1,
             num_workers=cfg.eval_num_workers,
             persistent_workers=cfg.eval_num_workers > 0,
             pin_memory=True,
             in_order=False,
             collate_fn=partial(
-                inference_collate_fn,
-                block_size=self.block_size,
-                k=self.k,
-                total_seq_len=cfg.total_seq_len,
+                inference_collate_fn, block_size=self.block_size, k=self.k
             ),
         )

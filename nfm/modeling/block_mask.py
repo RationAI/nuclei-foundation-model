@@ -5,6 +5,8 @@ from typing import Self
 import numpy as np
 import torch
 import torch.nn.attention.flex_attention
+import torch.nn.functional as F
+from einops import repeat
 from torch import Tensor, nn
 from torch.utils._pytree import tree_map_only
 
@@ -44,16 +46,19 @@ def create_ragged_block_quantized_knn_mask(
     current_offset = 0
 
     for doc_id, neighbors in enumerate(neighbor_indices_list):
-        N_i = neighbors.shape[0]
+        N_i = len(neighbors)
 
         # Vectorized offset (faster and more memory efficient than .clone() + valid_mask)
-        offset_neighbors = torch.where(
-            neighbors >= 0, neighbors + current_offset, neighbors
+        packed_neighbors_list.append(
+            torch.where(neighbors >= 0, neighbors + current_offset, neighbors)
         )
-        packed_neighbors_list.append(offset_neighbors)
 
         doc_ids_list.append(
-            torch.full((N_i,), doc_id, dtype=torch.int32, device=device)
+            torch.where(
+                (neighbors >= 0).any(dim=1),
+                torch.full((N_i,), doc_id, dtype=torch.int32, device=device),
+                torch.full((N_i,), -1, dtype=torch.int32, device=device),
+            )
         )
         current_offset += N_i
 
@@ -67,18 +72,14 @@ def create_ragged_block_quantized_knn_mask(
         raise ValueError(
             f"total_seq_len ({total_seq_len}) must be >= packed length ({N_real})"
         )
-    if total_seq_len > N_real:
-        pad_doc_ids = torch.full(
-            (total_seq_len - N_real,), -1, dtype=torch.int32, device=device
-        )
-        doc_ids = torch.cat((doc_ids, pad_doc_ids), dim=0)
+    doc_ids = F.pad(doc_ids, (0, total_seq_len - N_real), value=-1)
 
     num_blocks = math.ceil(total_seq_len / block_size)
 
     # === 2. Build Global Adjacency Matrix (2D) ===
     # Map token-level connections to block-level connections
     q_idx = torch.arange(N_real, device=device)
-    q_block_ids = (q_idx // block_size).unsqueeze(1).expand(N_real, K)
+    q_block_ids = repeat(q_idx // block_size, "n -> n k", k=K)
     kv_block_ids = packed_neighbors // block_size
 
     valid_conn = packed_neighbors >= 0
@@ -90,28 +91,23 @@ def create_ragged_block_quantized_knn_mask(
     kv_num_blocks = adj_matrix.sum(dim=-1, dtype=torch.int32)
 
     # === 3. Compress to Dense KV Indices ===
-    col_indices = (
-        torch.arange(num_blocks, device=device)
-        .unsqueeze(0)
-        .expand(num_blocks, num_blocks)
+    col_indices = repeat(
+        torch.arange(num_blocks, device=device, dtype=torch.int32),
+        "k -> n k",
+        n=num_blocks,
     )
 
     # Push invalid connections to the back (value: num_blocks + 1) and sort them out
     masked_col_indices = torch.where(adj_matrix, col_indices, num_blocks + 1)
-    sorted_indices, _ = masked_col_indices.sort(dim=-1)
-
-    kv_indices = torch.where(
-        sorted_indices > num_blocks,
-        torch.tensor(-1, dtype=torch.int32, device=device),
-        sorted_indices.to(torch.int32),
-    )
+    kv_indices, _ = masked_col_indices.sort(dim=-1)
+    kv_indices[kv_indices > num_blocks] = -1  # Demote invalid connections to -1
 
     # === 4. Optimize Fast Path (Pure vs Mixed Blocks) ===
-    block_starts = torch.arange(num_blocks, device=device) * block_size
-    block_ends = torch.clamp(block_starts + block_size - 1, max=total_seq_len - 1)
-
-    # Because doc_ids are strictly monotonic, checking boundaries proves purity
-    is_pure_block = doc_ids[block_starts] == doc_ids[block_ends]
+    padded_doc_ids = F.pad(
+        doc_ids, (0, num_blocks * block_size - total_seq_len), value=-2
+    ).view(num_blocks, block_size)
+    is_pure_block = (padded_doc_ids == padded_doc_ids[:, :1]).all(dim=1)
+    is_pure_block &= padded_doc_ids[:, 0] >= 0
 
     valid_kv_mask = kv_indices >= 0
     safe_kv_indices = torch.where(valid_kv_mask, kv_indices, 0)
@@ -138,6 +134,16 @@ def create_ragged_block_quantized_knn_mask(
     )
 
     full_kv_num_blocks = (full_kv_indices != -1).sum(dim=-1, dtype=torch.int32)
+
+    # FlexAttention processes full and partial lists separately: they must be
+    # disjoint, otherwise pure blocks are attended to twice.
+    partial_indices = kv_indices.masked_fill(
+        (~mixed_q_mask[:, None]) & is_kv_pure & valid_kv_mask, -1
+    )
+    partial_keys = torch.where(partial_indices >= 0, partial_indices, num_blocks + 1)
+    partial_keys = partial_keys.sort(dim=-1).values
+    kv_indices = torch.where(partial_keys < num_blocks, partial_keys, -1)
+    kv_num_blocks = (kv_indices >= 0).sum(dim=-1, dtype=torch.int32)
 
     # === 5. Reshape for BlockMask (Batch=1, Heads=1) ===
     return BlockMask.from_kv_blocks(

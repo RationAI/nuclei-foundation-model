@@ -13,7 +13,7 @@ class ClassificationNucleiDataset(NucleiDataset):
         self,
         slides: pd.DataFrame,
         annotation_path: str,
-        crop_size: int = 4096,
+        crop_size: int | None = 4096,
         alpha: float = 0.8,
         efd_order: int = 16,
     ) -> None:
@@ -49,29 +49,32 @@ class ClassificationNucleiDataset(NucleiDataset):
         )
         indices = np.arange(len(nuclei))
 
-        # With 75% positive slides, seed 2/3 of their crops in positive nuclei.
-        positive_seed = slide.is_carcinoma and torch.rand(()).item() < 2 / 3
-        valid_seeds = np.flatnonzero(labels == int(positive_seed))
-        seed = (
-            int(random.choice(valid_seeds))
-            if len(valid_seeds)
-            else random.randrange(len(nuclei))
-        )
-        center = points[seed]
+        if self.crop_size is not None:
+            # With 75% positive slides, seed 2/3 of their crops in positive nuclei.
+            positive_seed = slide.is_carcinoma and torch.rand(()).item() < 2 / 3
+            valid_seeds = np.flatnonzero(labels == int(positive_seed))
+            seed = (
+                int(random.choice(valid_seeds))
+                if len(valid_seeds)
+                else random.randrange(len(nuclei))
+            )
+            center = points[seed]
 
-        limit = int(self.crop_size / max(1 - self.alpha, 1e-4))
-        if len(points) > limit:
-            distances = np.linalg.norm(points - center, axis=1)
-            indices = np.argpartition(distances, limit - 1)[:limit]
+            limit = int(self.crop_size / max(1 - self.alpha, 1e-4))
+            if len(points) > limit:
+                distances = np.linalg.norm(points - center, axis=1)
+                indices = np.argpartition(distances, limit - 1)[:limit]
 
-        # Delaunay graph construction requires distinct points.
-        quantized = np.round(points[indices] / 1e-4).astype(np.int64)
-        _, unique = np.unique(quantized, axis=0, return_index=True)
-        indices = indices[np.sort(unique)]
-        crop_points = points[indices]
-        graph = build_spatial_graph(crop_points)
-        seed = int(np.argmin(np.linalg.norm(crop_points - center, axis=1)))
-        indices = indices[self.find_component(seed, self.crop_size, graph, crop_points)]
+            # Delaunay graph construction requires distinct points.
+            quantized = np.round(points[indices] / 1e-4).astype(np.int64)
+            _, unique = np.unique(quantized, axis=0, return_index=True)
+            indices = indices[np.sort(unique)]
+            crop_points = points[indices]
+            graph = build_spatial_graph(crop_points)
+            seed = int(np.argmin(np.linalg.norm(crop_points - center, axis=1)))
+            indices = indices[
+                self.find_component(seed, self.crop_size, graph, crop_points)
+            ]
 
         polygons = (
             np.stack(nuclei["polygon"].iloc[indices])
