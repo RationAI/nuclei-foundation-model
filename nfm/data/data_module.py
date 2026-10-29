@@ -48,7 +48,7 @@ def train_collate_fn(
 
     return {
         "block_mask": create_ragged_block_quantized_knn_mask(
-            all_knns, block_size, None
+            all_knns, block_size, total_seq_len
         ),
         "pos": _pad_to_seq_len(torch.cat(all_pos), total_seq_len),
         "efds": _pad_to_seq_len(torch.cat(all_efds), total_seq_len),
@@ -88,7 +88,7 @@ def inference_collate_fn(
 
     return {
         "block_mask": create_ragged_block_quantized_knn_mask(
-            all_knns, block_size, None
+            all_knns, block_size, total_seq_len
         ),
         "pos": _pad_to_seq_len(torch.cat(all_pos), total_seq_len),
         "efds": _pad_to_seq_len(torch.cat(all_efds), total_seq_len),
