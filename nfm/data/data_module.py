@@ -155,6 +155,7 @@ class DataModule(LightningDataModule):
                     persistent_workers=True,
                     pin_memory=True,
                     in_order=False,
+                    multiprocessing_context="spawn",  # for lance
                     collate_fn=partial(
                         train_collate_fn,
                         block_size=self.block_size,

@@ -16,7 +16,7 @@ class SourceBalancedRandomSampler(WeightedRandomSampler):
         weights = (1 - source_fraction) / len(sources) + source_fraction * sources.map(
             probabilities / sizes
         )
-        super().__init__(weights.to_numpy(), len(sources), replacement=True)
+        super().__init__(weights.to_numpy(copy=True), len(sources), replacement=True)
 
 
 class AutoWeightedRandomSampler(WeightedRandomSampler):
