@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import lance
 import numpy as np
 import pandas as pd
@@ -5,7 +7,7 @@ from numpy.typing import NDArray
 from pyarrow import FixedSizeListArray
 from torch.utils.data import Dataset
 
-from nfm.data.rendering import random_view
+from nfm.data.rendering import render
 
 
 def _to_numpy(column: FixedSizeListArray) -> NDArray[np.float32]:
@@ -20,12 +22,10 @@ class NucleiDataset(Dataset[NDArray[np.uint8]]):
         self,
         slides: pd.DataFrame,
         nuclei_path: str,
+        augmentation: Callable[..., dict[str, NDArray[np.uint8]]],
         views: int = 4,
         field: float = 128.0,
         size: int = 128,
-        scale: tuple[float, float] = (0.3, 1.0),
-        drop: float = 0.1,
-        blur: float = 0.5,
         region_nuclei: int = 512,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
@@ -33,9 +33,7 @@ class NucleiDataset(Dataset[NDArray[np.uint8]]):
         self.views = views
         self.field = field
         self.size = size
-        self.scale = tuple(scale)
-        self.drop = drop
-        self.blur = blur
+        self.augmentation = augmentation
         # Must cover a circle of radius field / sqrt(2) around the tile center.
         self.region_nuclei = region_nuclei
 
@@ -71,17 +69,13 @@ class NucleiDataset(Dataset[NDArray[np.uint8]]):
         polygons = (points[:, None] + radii[..., None] * directions) * mpp
         polygons = polygons.astype(np.float32)
 
+        # Oversized so that any rotation still fills the final tile.
+        image = render(
+            polygons,
+            seed[0] * mpp,
+            self.field * np.sqrt(2),
+            int(np.ceil(self.size * np.sqrt(2))),
+        )
         return np.stack(
-            [
-                random_view(
-                    polygons,
-                    seed[0] * mpp,
-                    self.field,
-                    self.size,
-                    self.scale,
-                    self.drop,
-                    self.blur,
-                )
-                for _ in range(self.views)
-            ]
+            [self.augmentation(image=image)["image"] for _ in range(self.views)]
         )

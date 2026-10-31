@@ -51,10 +51,33 @@ data:
         views: 4
         field: ${tile.field}
         size: ${tile.size}
-        scale: [0.3, 1.0]
-        drop: 0.1
-        blur: 0.5
         region_nuclei: 512
+        augmentation:
+          _target_: albumentations.Compose
+          _convert_: all
+          telemetry: false
+          transforms:
+            - _target_: albumentations.Rotate
+              angle_range: [-180, 180]
+              border_mode: 0 # cv2.BORDER_CONSTANT
+              p: 1.0
+            - _target_: albumentations.CenterCrop
+              height: ${tile.size}
+              width: ${tile.size}
+            - _target_: albumentations.RandomResizedCrop
+              size: [ "${tile.size}", "${tile.size}" ]
+              scale: [0.3, 1.0]
+              p: 1.0
+            - _target_: albumentations.HorizontalFlip
+              p: 0.5
+            - _target_: albumentations.CoarseDropout
+              num_holes_range: [1, 8]
+              hole_height_range: [0.05, 0.15]
+              hole_width_range: [0.05, 0.15]
+              p: 0.5
+            - _target_: albumentations.GaussianBlur
+              sigma_range: [0.1, 1.5]
+              p: 0.5
     labeled:
       slides_path: mlflow-artifacts:/37/5b9c6f096026425fa2b04c4e74b7a6f3/artifacts/panda/slides_mapping_train.parquet
       split_size: 0.2

@@ -12,6 +12,7 @@ dependencies = [
     "torchmetrics>=1.4.1",
     "rationai-mlkit>=0.2.0",
     "timm>=1.0.0",
+    "albumentationsx>=2.5.1",
     "opencv-python-headless>=4.10.0",
     "pylance>=6.0.1",
     "pandas>=2.3.3",
