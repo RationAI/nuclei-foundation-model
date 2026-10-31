@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 
 from nfm.data.datasets.nuclei_dataset import Sample
 from nfm.data.samplers import SourceBalancedRandomSampler
+from nfm.data.timing import DataTiming
 from nfm.modeling.block_mask import (
     BlockMask,
     block_spatial_sort,
@@ -30,60 +31,85 @@ type Batch = dict[str, Tensor | BlockMask | list[str]]
 
 
 def _pack_crops(
-    crops: list[Crop], block_size: int, k: int, max_sequence_length: int
+    crops: list[Crop],
+    block_size: int,
+    k: int,
+    max_sequence_length: int,
+    *,
+    timing: DataTiming | None = None,
 ) -> tuple[Batch, Layout]:
     """Pack crops contiguously at their actual lengths."""
+    timing = timing or DataTiming("pack", enabled=False)
     positions, efds, neighbors, layout = [], [], [], []
     offset = 0
     for pos, features in crops:
         n = len(pos)
-        order = block_spatial_sort(pos, block_size, global_offset=offset)
-        pos = np.asarray(pos[order], dtype=np.float32)
-        knn = (
-            NearestNeighbors(n_neighbors=min(k, n))
-            .fit(pos)
-            .kneighbors(pos, return_distance=False)
-        )
-        positions.append(torch.from_numpy(pos))
-        efds.append(torch.as_tensor(features)[order].float())
-        neighbors.append(F.pad(torch.from_numpy(knn), (0, k - knn.shape[1]), value=-1))
+        with timing.measure("spatial_sort"):
+            order = block_spatial_sort(pos, block_size, global_offset=offset)
+            pos = np.asarray(pos[order], dtype=np.float32)
+        with timing.measure("knn_fit"):
+            search = NearestNeighbors(n_neighbors=min(k, n)).fit(pos)
+        with timing.measure("knn_query"):
+            knn = search.kneighbors(pos, return_distance=False)
+        with timing.measure("crop_to_tensors"):
+            positions.append(torch.from_numpy(pos))
+            efds.append(torch.as_tensor(features)[order].float())
+            neighbors.append(
+                F.pad(torch.from_numpy(knn), (0, k - knn.shape[1]), value=-1)
+            )
         layout.append((order, offset))
         offset += n
-    return {
-        "pos": torch.cat(positions),
-        "efds": torch.cat(efds),
-        "block_mask": create_ragged_block_quantized_knn_mask(
+    with timing.measure("concatenate_tensors"):
+        packed = {"pos": torch.cat(positions), "efds": torch.cat(efds)}
+    with timing.measure("build_block_mask"):
+        packed["block_mask"] = create_ragged_block_quantized_knn_mask(
             neighbors, block_size, max_sequence_length=max_sequence_length
-        ),
-    }, layout
+        )
+    return packed, layout
 
 
 def train_collate_fn(
     batch: list[Sample], block_size: int, k: int, max_sequence_length: int
 ) -> Batch:
-    crops = [
-        (pos, efd)
-        for sample in batch
-        for pos, efd in zip(sample["pos"], sample["efds"], strict=True)
-    ]
-    packed, layout = _pack_crops(crops, block_size, k, max_sequence_length)
-    pairs = [[], []]
-    for b, sample in enumerate(batch):
-        for view in range(2):
-            order, offset = layout[2 * b + view]
-            ids = sample["indices"][view][order]
-            lookup = {int(nucleus_id): offset + i for i, nucleus_id in enumerate(ids)}
-            pairs[view].append(
-                torch.tensor(
-                    [lookup[int(i)] for i in sample["matched_ids"]], dtype=torch.long
-                )
+    with DataTiming(
+        "unlabeled.collate", slides=[s["slide_id"] for s in batch], samples=len(batch)
+    ) as timing:
+        crops = [
+            (pos, efd)
+            for sample in batch
+            for pos, efd in zip(sample["pos"], sample["efds"], strict=True)
+        ]
+        packed, layout = _pack_crops(
+            crops, block_size, k, max_sequence_length, timing=timing
+        )
+        with timing.measure("map_correspondences"):
+            pairs = [[], []]
+            for b, sample in enumerate(batch):
+                for view in range(2):
+                    order, offset = layout[2 * b + view]
+                    ids = sample["indices"][view][order]
+                    lookup = {
+                        int(nucleus_id): offset + i for i, nucleus_id in enumerate(ids)
+                    }
+                    pairs[view].append(
+                        torch.tensor(
+                            [lookup[int(i)] for i in sample["matched_ids"]],
+                            dtype=torch.long,
+                        )
+                    )
+        with timing.measure("assemble_batch"):
+            packed.update(
+                pair_indices=torch.stack([torch.cat(p) for p in pairs]),
+                pair_counts=torch.tensor([len(s["matched_ids"]) for s in batch]),
+                slide_ids=[s["slide_id"] for s in batch],
             )
-    packed.update(
-        pair_indices=torch.stack([torch.cat(p) for p in pairs]),
-        pair_counts=torch.tensor([len(s["matched_ids"]) for s in batch]),
-        slide_ids=[s["slide_id"] for s in batch],
-    )
-    return packed
+        timing.details.update(
+            crops=len(crops),
+            crop_nuclei=[len(pos) for pos, _ in crops],
+            packed_nuclei=len(packed["pos"]),
+            matches=packed["pair_indices"].shape[1],
+        )
+        return packed
 
 
 def inference_collate_fn(

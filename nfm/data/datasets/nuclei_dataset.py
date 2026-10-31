@@ -14,6 +14,7 @@ from torch.utils.data import Dataset
 from nfm.data.augmentations import Compose, FieldRotation, Flip, ShapeDistortion
 from nfm.data.efd import elliptic_fourier_descriptors
 from nfm.data.geometry import radial_polygons
+from nfm.data.timing import DataTiming
 
 
 type Sample = dict[str, Any]
@@ -70,76 +71,112 @@ class NucleiDataset(Dataset[Sample]):
         efds = elliptic_fourier_descriptors(polygons.astype(np.float64), self.efd_order)
         return centroids, efds.reshape(-1, self.efd_order * 4).astype(np.float32)
 
-    def sample_crops(self, points: NDArray, seed: int):
+    def sample_crops(
+        self, points: NDArray, seed: int, *, timing: DataTiming | None = None
+    ):
         """Grow A, then bias B's seed toward later nuclei in A's traversal."""
-        graph = build_spatial_graph(points)
-        first = np.asarray(self.find_component(seed, self.crop_size, graph, points))
+        timing = timing or DataTiming("unlabeled.crops", enabled=False)
+        with timing.measure("build_spatial_graph"):
+            graph = build_spatial_graph(points)
+        with timing.measure("grow_crop_a"):
+            first = np.asarray(self.find_component(seed, self.crop_size, graph, points))
 
         seed = first[int(random.triangular(0, len(first) - 1, len(first) * 0.9))]
-        second = np.asarray(self.find_component(seed, self.crop_size, graph, points))
+        with timing.measure("grow_crop_b"):
+            second = np.asarray(
+                self.find_component(seed, self.crop_size, graph, points)
+            )
 
         return first, second
 
-    def _candidates(self, slide: pd.Series) -> tuple[NDArray, NDArray, NDArray, int]:
-        ds = lance.dataset(
-            f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}/nuclei.lance"
-        )
+    def _candidates(
+        self, slide: pd.Series, *, timing: DataTiming | None = None
+    ) -> tuple[NDArray, NDArray, NDArray, int]:
+        timing = timing or DataTiming("unlabeled.candidates", enabled=False)
+        with timing.measure("lance_open"):
+            ds = lance.dataset(
+                f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}/nuclei.lance"
+            )
 
-        seed = np.asarray(
-            ds.sample(1, columns=["points"])["points"][0].as_py(), dtype=np.float64
-        )
-        table = ds.to_table(
-            nearest={
-                "column": "points",
-                "q": seed.astype(np.float32),
-                "k": min(ds.count_rows(), int(2 * self.crop_size / (1 - self.alpha))),
-                "metric": "euclidean",
-            },
-            with_row_id=True,
-            disable_scoring_autoprojection=True,
-        )
+        with timing.measure("lance_sample_seed"):
+            seed = np.asarray(
+                ds.sample(1, columns=["points"])["points"][0].as_py(), dtype=np.float64
+            )
+        with timing.measure("lance_count_rows"):
+            row_count = ds.count_rows()
+        candidate_k = min(row_count, int(2 * self.crop_size / (1 - self.alpha)))
+        timing.details.update(slide_nuclei=row_count, requested_candidates=candidate_k)
+        with timing.measure("lance_nearest_read"):
+            table = ds.to_table(
+                nearest={
+                    "column": "points",
+                    "q": seed.astype(np.float32),
+                    "k": candidate_k,
+                    "metric": "euclidean",
+                },
+                with_row_id=True,
+                disable_scoring_autoprojection=True,
+            )
 
         mpp = np.asarray([slide.mpp_x, slide.mpp_y], dtype=np.float64)
-        points = np.asarray(table["points"].to_pylist(), dtype=np.float64)
-        radial_distances = np.asarray(
-            table["radial_distances"].to_pylist(), dtype=np.float64
-        )
-        ids = np.asarray(table["_rowid"].to_pylist(), dtype=np.uint64)
-        polygons = radial_polygons(points, radial_distances) * mpp
-        points *= mpp
+        with timing.measure("decode_points"):
+            points = np.asarray(table["points"].to_pylist(), dtype=np.float64)
+        with timing.measure("decode_radial_distances"):
+            radial_distances = np.asarray(
+                table["radial_distances"].to_pylist(), dtype=np.float64
+            )
+        with timing.measure("decode_ids"):
+            ids = np.asarray(table["_rowid"].to_pylist(), dtype=np.uint64)
+        with timing.measure("reconstruct_polygons"):
+            polygons = radial_polygons(points, radial_distances) * mpp
+            points *= mpp
 
         # The Delaunay implementation requires distinct positions. Retain the
         # first persistent ID at each physical location, including the seed.
-        _, unique = np.unique(
-            np.round(points / 1e-4).astype(np.int64), axis=0, return_index=True
-        )
-        points, polygons, ids = (
-            points[unique],
-            polygons[unique],
-            ids[unique],
-        )
+        with timing.measure("deduplicate_candidates"):
+            _, unique = np.unique(
+                np.round(points / 1e-4).astype(np.int64), axis=0, return_index=True
+            )
+            points, polygons, ids = (
+                points[unique],
+                polygons[unique],
+                ids[unique],
+            )
 
-        seed = int(np.argmin(np.linalg.norm(points - seed * mpp, axis=1)))
-        return points.astype(np.float32), polygons, ids, seed
+        with timing.measure("locate_seed"):
+            seed = int(np.argmin(np.linalg.norm(points - seed * mpp, axis=1)))
+            points = points.astype(np.float32)
+        timing.details["candidate_nuclei"] = len(points)
+        return points, polygons, ids, seed
 
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
-        points, polygons, ids, seed = self._candidates(slide)
-        first, second = self.sample_crops(points, seed)
+        with DataTiming(
+            "unlabeled.sample", sample=int(idx), slide=str(slide.id)
+        ) as timing:
+            points, polygons, ids, seed = self._candidates(slide, timing=timing)
+            first, second = self.sample_crops(points, seed, timing=timing)
 
-        views = []
-        for crop in [first, second]:
-            result = self.augmentation(
-                polygons=polygons[crop].copy(), indices=ids[crop].copy()
+            views = []
+            for view, crop in enumerate([first, second]):
+                with timing.measure(f"view_{view}_augmentation"):
+                    result = self.augmentation(
+                        polygons=polygons[crop].copy(), indices=ids[crop].copy()
+                    )
+                view_ids = np.asarray(result["indices"])
+                with timing.measure(f"view_{view}_efd"):
+                    pos, efds = self.polygon_to_efd(result["polygons"])
+                views.append((pos, efds, view_ids))
+
+            with timing.measure("match_ids"):
+                matched_ids = np.intersect1d(views[0][2], views[1][2])
+            timing.details.update(
+                view_nuclei=[len(v[0]) for v in views], matches=len(matched_ids)
             )
-            view_ids = np.asarray(result["indices"])
-            pos, efds = self.polygon_to_efd(result["polygons"])
-            views.append((pos, efds, view_ids))
-
-        return {
-            "pos": [v[0] for v in views],
-            "efds": [v[1] for v in views],
-            "indices": [v[2] for v in views],
-            "matched_ids": np.intersect1d(views[0][2], views[1][2]),
-            "slide_id": str(slide.id),
-        }
+            return {
+                "pos": [v[0] for v in views],
+                "efds": [v[1] for v in views],
+                "indices": [v[2] for v in views],
+                "matched_ids": matched_ids,
+                "slide_id": str(slide.id),
+            }
