@@ -64,14 +64,6 @@ class NucleiDataset(Dataset[Sample]):
                     heapq.heappush(pq, (cost, n_idx))
         return component_indices
 
-    def radial_to_polygon(self, points: NDArray, radial_distances: NDArray) -> NDArray:
-        t = np.linspace(0, 1, radial_distances.shape[-1] + 1, dtype=np.float32)[:-1]
-        cos = np.cos(2 * np.pi * t)
-        sin = np.sin(2 * np.pi * t)
-
-        polar = radial_distances[..., None] * np.stack([sin, cos], axis=-1)
-        return points[:, None] + polar
-
     def polygon_to_efd(self, polygons: NDArray) -> tuple[NDArray, NDArray]:
         """Encode SSL/probe contours with the original EFD-only input."""
         centroids = polygons.mean(axis=1)
