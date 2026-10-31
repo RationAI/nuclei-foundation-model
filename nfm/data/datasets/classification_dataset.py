@@ -1,93 +1,78 @@
-import random
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
-from degraph import build_spatial_graph
+from torch.utils.data import Dataset
 
-from nfm.data.datasets.nuclei_dataset import NucleiDataset, Sample
+from nfm.data.rendering import render
 
 
-class ClassificationNucleiDataset(NucleiDataset):
+class ClassificationNucleiDataset(Dataset[dict[str, Any]]):
+    """Rendered tiles of one Radboud slide, positive if >= 50 % nuclei are positive.
+
+    Training draws tiles centered on random nuclei. Evaluation uses the occupied
+    cells of a fixed non-overlapping grid, subsampled reproducibly per slide.
+    """
+
     def __init__(
         self,
         slides: pd.DataFrame,
         annotation_path: str,
-        crop_size: int | None = 4096,
-        alpha: float = 0.8,
-        efd_order: int = 16,
+        tiles_per_slide: int,
+        grid: bool = False,
+        field: float = 128.0,
+        size: int = 128,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
+        self.annotation_path = annotation_path
+        self.tiles_per_slide = tiles_per_slide
+        self.grid = grid
+        self.field = field
+        self.size = size
 
-        annotations = pd.read_parquet(
-            annotation_path, columns=["slide_id", "id", "annot_label"]
-        )
-        annotations = annotations[annotations["slide_id"].isin(self.slides.slide_id)]
-        self.annotations = {
-            slide_id: group.set_index("id")["annot_label"]
-            for slide_id, group in annotations.groupby("slide_id")
-        }
-        self.positivity = {
-            slide.slide_id: float(self.annotations[slide.slide_id].mean())
-            if slide.is_carcinoma
-            else 0.0
-            for slide in self.slides.itertuples()
-        }
-        self.crop_size = crop_size
-        self.alpha = alpha
-        self.efd_order = efd_order
+    def __len__(self) -> int:
+        return len(self.slides)
 
-    def __getitem__(self, idx: int) -> Sample:
+    def tile_centers(self, centroids: np.ndarray, idx: int) -> np.ndarray:
+        if not self.grid:
+            picks = np.random.randint(len(centroids), size=self.tiles_per_slide)
+            return centroids[picks]
+        cells = np.unique(np.floor(centroids / self.field), axis=0)
+        count = min(len(cells), self.tiles_per_slide)
+        cells = np.random.default_rng(idx).permutation(cells)[:count]
+        return ((cells + 0.5) * self.field).astype(np.float32)
+
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         slide = self.slides.iloc[idx]
         nuclei = pd.read_parquet(
             slide.slide_nuclei_path, columns=["id", "centroid", "polygon"]
-        ).sort_values("id")
-        mpps = np.array([slide.mpp_x, slide.mpp_y], dtype=np.float32)
-        points = np.stack(nuclei["centroid"]).astype(np.float32) * mpps
+        )
         labels = (
-            self.annotations[slide.slide_id].loc[nuclei["id"]].to_numpy(np.float32)
+            pd.read_parquet(
+                f"{self.annotation_path}/{slide.slide_id}.parquet",
+                columns=["id", "annot_label"],
+            )
+            .set_index("id")["annot_label"]
+            .loc[nuclei["id"]]
+            .to_numpy(np.float32)
             if slide.is_carcinoma
             else np.zeros(len(nuclei), dtype=np.float32)
         )
-        indices = np.arange(len(nuclei))
-
-        if self.crop_size is not None:
-            # With 75% positive slides, seed 2/3 of their crops in positive nuclei.
-            positive_seed = slide.is_carcinoma and torch.rand(()).item() < 2 / 3
-            valid_seeds = np.flatnonzero(labels == int(positive_seed))
-            seed = (
-                int(random.choice(valid_seeds))
-                if len(valid_seeds)
-                else random.randrange(len(nuclei))
-            )
-            center = points[seed]
-
-            limit = int(self.crop_size / max(1 - self.alpha, 1e-4))
-            if len(points) > limit:
-                distances = np.linalg.norm(points - center, axis=1)
-                indices = np.argpartition(distances, limit - 1)[:limit]
-
-            # Delaunay graph construction requires distinct points.
-            quantized = np.round(points[indices] / 1e-4).astype(np.int64)
-            _, unique = np.unique(quantized, axis=0, return_index=True)
-            indices = indices[np.sort(unique)]
-            crop_points = points[indices]
-            graph = build_spatial_graph(crop_points)
-            seed = int(np.argmin(np.linalg.norm(crop_points - center, axis=1)))
-            indices = indices[
-                self.find_component(seed, self.crop_size, graph, crop_points)
-            ]
-
+        mpp = np.array([slide.mpp_x, slide.mpp_y], dtype=np.float32)
+        centroids = np.stack(nuclei["centroid"]).astype(np.float32) * mpp
         polygons = (
-            np.stack(nuclei["polygon"].iloc[indices])
-            .reshape(len(indices), -1, 2)
-            .astype(np.float32)
+            np.stack(nuclei["polygon"]).astype(np.float32).reshape(len(nuclei), -1, 2)
+            * mpp
         )
-        centroids, efds = self.polygon_to_efd(polygons * mpps)
 
+        centers = self.tile_centers(centroids, idx)
+        images = [render(polygons, c, self.field, self.size) for c in centers]
+        tile_labels = [
+            labels[np.abs(centroids - c).max(axis=1) <= self.field / 2].mean() >= 0.5
+            for c in centers
+        ]
         return {
-            "pos": centroids,
-            "efds": torch.from_numpy(efds),
-            "labels": torch.from_numpy(labels[indices])[:, None],
-            "slide_id": str(slide.slide_id),
+            "images": torch.from_numpy(np.stack(images)).unsqueeze(1),
+            "labels": torch.tensor(tile_labels, dtype=torch.float32),
         }

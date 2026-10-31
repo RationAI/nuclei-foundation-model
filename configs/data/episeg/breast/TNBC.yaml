@@ -1,4 +1,0 @@
-name: breast TNBC
-slides: /mnt/projects/epithelium_segmentation/breast/TNBC/tif/he
-nuclei: ${project_path}/nuclei/breast/TNBC
-annot_masks: /mnt/projects/epithelium_segmentation/breast/TNBC/tif/ce

@@ -1,4 +1,0 @@
-name: colorectal
-slides: /mnt/projects/epithelium_segmentation/colorectal/tif/rgb
-nuclei: ${project_path}/nuclei/colorectal
-annot_masks: /mnt/projects/epithelium_segmentation/colorectal/tif/label

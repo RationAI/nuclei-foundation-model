@@ -1,0 +1,7 @@
+# @package _global_
+# uv run python -m nfm +experiment=lejepa
+mode: fit
+
+metadata:
+  run_name: LeJEPA ViT-S/8 rendered nuclei
+  description: LeJEPA on grayscale nuclei tiles with an online Radboud tile probe

@@ -1,184 +1,124 @@
-"""Nucleus correspondence SSL and a continuously trained, detached linear probe."""
+"""LeJEPA on rendered nuclei tiles with a detached online Radboud probe."""
 
 import math
 from typing import Any
 
+import timm
 import torch
 import torch.nn.functional as F
 from lightning import LightningModule
 from torch import Tensor, nn
 from torchmetrics import MetricCollection
-from torchmetrics.classification import (
-    BinaryAUROC,
-    BinaryAveragePrecision,
-    BinaryPrecision,
-    BinaryRecall,
-)
+from torchmetrics.classification import BinaryAUROC, BinaryAveragePrecision
+from torchvision.ops import MLP
 
-from nfm.configuration import Config
-from nfm.modeling.objectives import NucleusObjective
-from nfm.modeling.transformer import NFM
+from nfm.modeling.sigreg import SIGReg
 
 
 class SSLMetaArch(LightningModule):
     def __init__(
         self,
-        warmup_steps: int = 1000,
-        lr: float = 0.0003,
-        regularizer: str = "sigreg",
-        regularizer_weight: float | None = None,
-        slices: int = 256,
-        projector_dim: int = 128,
+        backbone: str = "vit_small_patch8_224",
+        image_size: int = 128,
+        embed_dim: int = 512,
+        projector_dim: int = 16,
+        drop_path_rate: float = 0.1,
+        lamb: float = 0.02,
+        lr: float = 2e-3,
+        probe_lr: float = 1e-3,
         weight_decay: float = 0.05,
-        **config: Any,
+        warmup_steps: int = 1000,
     ) -> None:
         super().__init__()
+        self.lamb = lamb
         self.lr = lr
-        self.warmup_steps = warmup_steps
+        self.probe_lr = probe_lr
         self.weight_decay = weight_decay
-        self.config = Config(**config)
-        self.model = NFM(self.config)
-        self.proj = nn.Sequential(
-            nn.Linear(self.config.dim, 512), nn.GELU(), nn.Linear(512, projector_dim)
+        self.warmup_steps = warmup_steps
+        self.backbone = timm.create_model(
+            backbone,
+            pretrained=False,
+            in_chans=1,
+            img_size=image_size,
+            num_classes=embed_dim,
+            drop_path_rate=drop_path_rate,
         )
-        self.objective = NucleusObjective(regularizer, regularizer_weight, slices)
-        self.probe = nn.Linear(self.config.dim, 1)
+        self.projector = MLP(
+            embed_dim, [2048, 2048, projector_dim], norm_layer=nn.BatchNorm1d
+        )
+        self.sigreg = SIGReg()
+        self.probe = nn.Sequential(nn.LayerNorm(embed_dim), nn.Linear(embed_dim, 1))
         self.val_metrics = MetricCollection(
-            {
-                "precision": BinaryPrecision(),
-                "recall": BinaryRecall(),
-                "AUROC": BinaryAUROC(),
-                "AUPRC": BinaryAveragePrecision(),
-            },
+            {"AUROC": BinaryAUROC(), "AUPRC": BinaryAveragePrecision()},
             prefix="validation/",
         )
 
-    def forward(self, batch) -> Tensor:
-        return self.model(batch["efds"], batch["pos"], batch["block_mask"])
-
-    def forward_unlabeled(self, batch: dict[str, Any]) -> Tensor:
-        embeddings = self(batch)
-        matched = embeddings[batch["pair_indices"]]  # [view, total matches, dim]
-        counts = batch["pair_counts"]
-        region_ids = torch.repeat_interleave(
-            torch.arange(len(counts), device=counts.device), counts
-        )
-        means = matched.float().new_zeros(2, len(counts), matched.shape[-1])
-        means.index_add_(1, region_ids, matched.float())
-        means = means / counts.clamp_min(1)[None, :, None]
-        nonempty = counts > 0
-
-        projected = self.proj(matched)
-        loss, components = self.objective(projected)
-        size = len(batch["slide_ids"])
-        for name, value in components.items():
-            self.log(f"train/{name}", value, batch_size=size)
-        self.log("train/ssl_loss", loss, batch_size=size, prog_bar=True)
-        with torch.no_grad():
-            self.log(
-                "train/projector_std",
-                projected.float().std(1, unbiased=False).mean()
-                if projected.shape[1]
-                else projected.new_zeros(()),
-                batch_size=size,
-            )
-            residual = (
-                embeddings[batch["pair_indices"]].float() - means[:, region_ids].float()
-            )
-            self.log(
-                "train/within_region_std",
-                residual.square().mean().sqrt()
-                if residual.numel()
-                else residual.new_zeros(()),
-                batch_size=size,
-            )
-            occupied = means[:, nonempty].float()
-            self.log(
-                "train/between_region_std",
-                occupied.var(1, unbiased=False).mean().sqrt()
-                if occupied.shape[1]
-                else occupied.new_zeros(()),
-                batch_size=size,
-            )
-            self.log("train/matched_nuclei", counts.sum().float(), batch_size=size)
-            self.log("train/matches_per_region", counts.float().mean(), batch_size=size)
-            self.log(
-                "train/empty_intersections",
-                (counts == 0).sum().float(),
-                batch_size=size,
-            )
-            self.log(
-                "train/unique_slides",
-                float(len(set(batch["slide_ids"]))),
-                batch_size=size,
-            )
-            self.log("train/tokens", float(len(batch["efds"])), batch_size=size)
-        return loss
-
-    def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
-        # Probe labels must not influence encoder weights OR BN running stats.
-        was_training = self.model.training
-        self.model.eval()
-        with torch.no_grad():
-            embeddings = self(batch)
-        self.model.train(was_training)
-
-        score = batch["score"]
-        logits = self.probe(embeddings[score])
-        loss = F.binary_cross_entropy_with_logits(logits, batch["labels"][score])
-        self.log(
-            "train/probe_loss",
-            loss,
-            on_step=True,
-            on_epoch=True,
-            prog_bar=True,
-            batch_size=int(score.sum()),
-        )
-        return loss
+    def forward(self, images: Tensor) -> Tensor:
+        return self.backbone((images.float() / 255 - 0.5) / 0.5)
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
-        ssl = self.forward_unlabeled(batch["unlabeled"])
-        probe = self.forward_labeled(batch["labeled"])
-        loss = ssl + probe
-        self.log(
-            "train/total_loss", loss, batch_size=len(batch["unlabeled"]["slide_ids"])
-        )
-        return loss
+        views = batch["unlabeled"]  # [batch, views, height, width], uint8
+        n, v = views.shape[:2]
+        embeddings = self(views.flatten(0, 1).unsqueeze(1))
+        proj = self.projector(embeddings).reshape(n, v, -1).transpose(0, 1)
+        invariance = (proj.mean(0) - proj).square().mean()
+        sigreg = self.sigreg(proj)
+        lejepa = self.lamb * sigreg + (1 - self.lamb) * invariance
 
-    def validation_step(self, batch: dict[str, Any]) -> None:
-        embeddings = self(batch)
-        logits = self.probe(embeddings)
+        # Labels must not reach the encoder, and the probe sees no drop path.
+        self.backbone.eval()
+        with torch.no_grad():
+            features = self(batch["labeled"]["images"])
+        self.backbone.train()
+        logits = self.probe(features).squeeze(1)
+        probe = F.binary_cross_entropy_with_logits(logits, batch["labeled"]["labels"])
+
+        self.log_dict(
+            {
+                "train/lejepa_loss": lejepa,
+                "train/invariance_loss": invariance,
+                "train/sigreg_loss": sigreg,
+                "train/probe_loss": probe,
+                "train/embedding_std": embeddings.detach().std(0).mean(),
+            },
+            batch_size=n,
+            prog_bar=True,
+        )
+        return lejepa + probe
+
+    def validation_step(self, batch: dict[str, Tensor]) -> None:
+        logits = self.probe(self(batch["images"])).squeeze(1)
         loss = F.binary_cross_entropy_with_logits(logits, batch["labels"])
         self.val_metrics.update(logits.sigmoid(), batch["labels"].long())
-        self.log(
-            "validation/probe_loss", loss, on_epoch=True, sync_dist=True, batch_size=1
-        )
-        self.log_dict(self.val_metrics, on_epoch=True, batch_size=1)
+        self.log("validation/probe_loss", loss, batch_size=len(logits), sync_dist=True)
+        self.log_dict(self.val_metrics, batch_size=len(logits))
 
-    def configure_optimizers(self):
-        # Keep module registration order so checkpoint state maps to the same
-        # parameters when a new model instance restores the optimizer.
-        decay, no_decay = [], []
-        for name, parameter in self.named_parameters():
-            group = no_decay if parameter.ndim <= 1 or ".rope." in name else decay
-            group.append(parameter)
+    def configure_optimizers(self) -> dict[str, Any]:
         optimizer = torch.optim.AdamW(
             [
-                {"params": decay},
-                {"params": no_decay, "weight_decay": 0},
+                {
+                    "params": [
+                        *self.backbone.parameters(),
+                        *self.projector.parameters(),
+                    ],
+                    "lr": self.lr,
+                    "weight_decay": self.weight_decay,
+                },
+                {
+                    "params": self.probe.parameters(),
+                    "lr": self.probe_lr,
+                    "weight_decay": 1e-7,
+                },
             ],
-            lr=self.lr,
-            weight_decay=self.weight_decay,
+            fused=True,
         )
-        # Native Python floats keep optimizer checkpoints weights_only-loadable.
-        total = max(int(self.trainer.estimated_stepping_batches), 1)
-        warmup = min(self.warmup_steps, max(total - 1, 0))
+        total = int(self.trainer.estimated_stepping_batches)
 
-        def schedule(step):
-            if step < warmup:
-                return 0.01 + 0.99 * step / max(warmup, 1)
-            progress = min((step - warmup) / max(total - warmup, 1), 1.0)
-            return 0.5 * (1 + math.cos(math.pi * progress))
+        def schedule(step: int) -> float:
+            if step < self.warmup_steps:
+                return 0.01 + 0.99 * step / self.warmup_steps
+            progress = (step - self.warmup_steps) / (total - self.warmup_steps)
+            return 1e-3 + (1 - 1e-3) * 0.5 * (1 + math.cos(math.pi * min(progress, 1)))
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
         return {

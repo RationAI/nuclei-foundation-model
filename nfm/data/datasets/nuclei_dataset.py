@@ -1,146 +1,87 @@
-"""Graph-grown overlapping crops with identity-preserving independent views."""
-
-import heapq
-import random
-from typing import Any
-
 import lance
 import numpy as np
 import pandas as pd
-from degraph import build_spatial_graph
 from numpy.typing import NDArray
+from pyarrow import FixedSizeListArray
 from torch.utils.data import Dataset
 
-from nfm.data.augmentations import Compose, FieldRotation, Flip, ShapeDistortion
-from nfm.data.efd import elliptic_fourier_descriptors
-from nfm.data.geometry import radial_polygons
+from nfm.data.rendering import random_view
 
 
-type Sample = dict[str, Any]
+def _to_numpy(column: FixedSizeListArray) -> NDArray[np.float32]:
+    flat = column.combine_chunks().flatten().to_numpy().astype(np.float32)
+    return flat.reshape(len(column), -1)
 
 
-class NucleiDataset(Dataset[Sample]):
+class NucleiDataset(Dataset[NDArray[np.uint8]]):
+    """Multiple rendered views of a random tile from the whole cohort."""
+
     def __init__(
         self,
         slides: pd.DataFrame,
         nuclei_path: str,
-        crop_size: int = 4096,
-        alpha: float = 0.85,
-        efd_order: int = 16,
-        augmentation: Compose | None = None,
+        views: int = 4,
+        field: float = 128.0,
+        size: int = 128,
+        scale: tuple[float, float] = (0.3, 1.0),
+        drop: float = 0.1,
+        blur: float = 0.5,
+        region_nuclei: int = 512,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
         self.nuclei_path = nuclei_path
-        self.crop_size = crop_size
-        self.alpha, self.efd_order = alpha, efd_order
-        self.augmentation = augmentation or Compose(
-            [Flip(), FieldRotation(), ShapeDistortion(noise_std=0.01)]
-        )
+        self.views = views
+        self.field = field
+        self.size = size
+        self.scale = tuple(scale)
+        self.drop = drop
+        self.blur = blur
+        # Must cover a circle of radius field / sqrt(2) around the tile center.
+        self.region_nuclei = region_nuclei
 
     def __len__(self) -> int:
         return len(self.slides)
 
-    def find_component(
-        self,
-        idx: int,
-        k: int,
-        graph: list[list[tuple[int, float]]],
-        centroids: NDArray[np.float32],
-        indices: set[int] | None = None,
-    ) -> list[int]:
-        component_indices = []
-        visited = np.zeros(len(centroids), dtype=np.bool_)
-        pq = [(0.0, idx)]
-        start_dist = np.linalg.norm(centroids - centroids[idx], axis=1)
-        while pq and len(component_indices) < k:
-            _, current_idx = heapq.heappop(pq)
-            if visited[current_idx]:
-                continue
-            visited[current_idx] = True
-            component_indices.append(current_idx)
-            for n_idx, edge_dist in graph[current_idx]:
-                if not visited[n_idx] and (indices is None or n_idx in indices):
-                    cost = self.alpha * edge_dist + (1 - self.alpha) * start_dist[n_idx]
-                    heapq.heappush(pq, (cost, n_idx))
-        return component_indices
-
-    def polygon_to_efd(self, polygons: NDArray) -> tuple[NDArray, NDArray]:
-        """Encode SSL/probe contours with the original EFD-only input."""
-        centroids = polygons.mean(axis=1)
-        efds = elliptic_fourier_descriptors(polygons.astype(np.float64), self.efd_order)
-        return centroids, efds.reshape(-1, self.efd_order * 4).astype(np.float32)
-
-    def sample_crops(self, points: NDArray, seed: int):
-        """Grow A, then bias B's seed toward later nuclei in A's traversal."""
-        graph = build_spatial_graph(points)
-        first = np.asarray(self.find_component(seed, self.crop_size, graph, points))
-
-        seed = first[int(random.triangular(0, len(first) - 1, len(first) * 0.9))]
-        second = np.asarray(self.find_component(seed, self.crop_size, graph, points))
-
-        return first, second
-
-    def _candidates(self, slide: pd.Series) -> tuple[NDArray, NDArray, NDArray, int]:
+    def __getitem__(self, idx: int) -> NDArray[np.uint8]:
+        slide = self.slides.iloc[idx]
         ds = lance.dataset(
             f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}/nuclei.lance"
         )
-
-        seed = np.asarray(
-            ds.sample(1, columns=["points"])["points"][0].as_py(), dtype=np.float64
+        count = ds.count_rows()
+        seed = _to_numpy(
+            ds.take([np.random.randint(count)], columns=["points"])["points"]
         )
         table = ds.to_table(
+            columns=["points", "radial_distances"],
             nearest={
                 "column": "points",
-                "q": seed.astype(np.float32),
-                "k": min(ds.count_rows(), int(2 * self.crop_size / (1 - self.alpha))),
+                "q": seed[0],
+                "k": min(count, self.region_nuclei),
                 "metric": "euclidean",
             },
-            with_row_id=True,
             disable_scoring_autoprojection=True,
         )
+        points = _to_numpy(table["points"])
+        radii = _to_numpy(table["radial_distances"])
 
-        mpp = np.asarray([slide.mpp_x, slide.mpp_y], dtype=np.float32)
-        points = np.asarray(table["points"].to_pylist(), dtype=np.float32)
-        radial_distances = np.asarray(
-            table["radial_distances"].to_pylist(), dtype=np.float64
+        # The store keeps radial contours in a [sin, cos] convention, in pixels.
+        angles = np.arange(radii.shape[1]) * 2 * np.pi / radii.shape[1]
+        directions = np.stack([np.sin(angles), np.cos(angles)], axis=-1)
+        mpp = np.array([slide.mpp_x, slide.mpp_y], dtype=np.float32)
+        polygons = (points[:, None] + radii[..., None] * directions) * mpp
+        polygons = polygons.astype(np.float32)
+
+        return np.stack(
+            [
+                random_view(
+                    polygons,
+                    seed[0] * mpp,
+                    self.field,
+                    self.size,
+                    self.scale,
+                    self.drop,
+                    self.blur,
+                )
+                for _ in range(self.views)
+            ]
         )
-        ids = np.asarray(table["_rowid"].to_pylist(), dtype=np.uint64)
-        polygons = radial_polygons(points, radial_distances) * mpp
-        points *= mpp
-
-        # Deduplicate in the graph builder's float32 representation: converting
-        # after deduplication can merge distinct float64 physical coordinates.
-        # Keep points, polygons and persistent IDs aligned through the selection.
-        _, unique = np.unique(
-            np.round(points / 1e-4).astype(np.int64), axis=0, return_index=True
-        )
-        points, polygons, ids = (
-            points[unique],
-            polygons[unique],
-            ids[unique],
-        )
-
-        seed = int(np.argmin(np.linalg.norm(points - seed * mpp, axis=1)))
-        return points, polygons, ids, seed
-
-    def __getitem__(self, idx: int) -> Sample:
-        slide = self.slides.iloc[idx]
-        points, polygons, ids, seed = self._candidates(slide)
-        first, second = self.sample_crops(points, seed)
-
-        views = []
-        for crop in [first, second]:
-            result = self.augmentation(
-                polygons=polygons[crop].copy(), indices=ids[crop].copy()
-            )
-            view_ids = np.asarray(result["indices"])
-            pos, efds = self.polygon_to_efd(result["polygons"])
-            views.append((pos, efds, view_ids))
-
-        return {
-            "pos": [v[0] for v in views],
-            "efds": [v[1] for v in views],
-            "indices": [v[2] for v in views],
-            "matched_ids": np.intersect1d(views[0][2], views[1][2]),
-            "slide_id": str(slide.id),
-        }

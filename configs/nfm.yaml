@@ -7,26 +7,66 @@ mode: ???
 checkpoint: null
 
 trainer:
-  max_epochs: 10000
-  sync_batchnorm: true
-  log_every_n_steps: 10
+  max_steps: 100000
+  max_epochs: -1
   precision: bf16-mixed
+  log_every_n_steps: 10
+  val_check_interval: 2000
+  check_val_every_n_epoch: null
+  num_sanity_val_steps: 0
   callbacks:
     model_checkpoint:
       _target_: lightning.pytorch.callbacks.ModelCheckpoint
       save_top_k: 1
       save_last: true
-      every_n_epochs: 5
       monitor: validation/probe_loss
       mode: min
 
 model:
+  backbone: vit_small_patch8_224
+  image_size: ${tile.size}
+  embed_dim: 512
+  projector_dim: 16
+  drop_path_rate: 0.1
+  lamb: 0.02
+  lr: 0.002
+  probe_lr: 0.001
+  weight_decay: 0.05
   warmup_steps: 1000
-  regularizer: sigreg
-  regularizer_weight: null
-  slices: 256
-  projector_dim: 128
-  alignment_level: nucleus
+
+# 128 um field of view at 1 um/px: about 30 nuclei per tile, one nucleus per patch.
+tile:
+  field: 128.0
+  size: 128
 
 data:
-  max_sequence_length: 131072
+  datasets:
+    unlabeled:
+      slides_path: ${project_path}/train_final.parquet
+      batch_size: 256
+      num_workers: 40
+      dataset:
+        _target_: nfm.data.datasets.NucleiDataset
+        nuclei_path: ${project_path}/cells
+        views: 4
+        field: ${tile.field}
+        size: ${tile.size}
+        scale: [0.3, 1.0]
+        drop: 0.1
+        blur: 0.5
+        region_nuclei: 512
+    labeled:
+      slides_path: mlflow-artifacts:/37/5b9c6f096026425fa2b04c4e74b7a6f3/artifacts/panda/slides_mapping_train.parquet
+      split_size: 0.2
+      split_stratify_col: gleason_score
+      batch_size: 8 # slides, so 128 tiles per step
+      tiles_per_slide: 16
+      num_workers: 6
+      eval_batch_size: 8 # slides, so up to 512 tiles per step
+      eval_tiles_per_slide: 64
+      eval_num_workers: 6
+      dataset:
+        _target_: nfm.data.datasets.ClassificationNucleiDataset
+        annotation_path: /mnt/projects/nuclei_based_wsi_analysis/nuclei_supervision/PANDA/Radboud/annotation
+        field: ${tile.field}
+        size: ${tile.size}
