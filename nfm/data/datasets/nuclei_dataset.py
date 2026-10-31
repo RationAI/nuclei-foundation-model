@@ -82,7 +82,7 @@ class NucleiDataset(Dataset[Sample]):
 
     def _candidates(self, slide: pd.Series) -> tuple[NDArray, NDArray, NDArray, int]:
         ds = lance.dataset(
-            f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}.lance"
+            f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}/nuclei.lance"
         )
 
         seed = np.asarray(

@@ -9,10 +9,6 @@ metadata:
 model:
   lr: 0.0003
   warmup_steps: 500
-  dim: 256
-  hidden_dim: 1024
-  num_heads: 8
-  num_layers: 4
   efd_order: ${data.datasets.unlabeled.dataset.efd_order}
 
 trainer:
