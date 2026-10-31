@@ -1,10 +1,11 @@
-"""Evaluate fixed morphology features against a matched random encoder.
+"""Evaluate fixed nucleus/region features against a matched random encoder.
 
 Run on the data/GPU host: python -m nfm.frozen_benchmark --run-id RUN_ID
 Only aggregate results are written locally; the MLflow run is read-only.
 """
 
 import argparse
+import copy
 import hashlib
 import json
 import random
@@ -15,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from hydra.utils import instantiate
+from hydra.utils import get_class, instantiate
 from mlflow import MlflowClient
 from mlflow.artifacts import download_artifacts
 from omegaconf import OmegaConf
@@ -37,8 +38,10 @@ from nfm.data.data_module import inference_collate_fn
 from nfm.morphology_meta_arch import MorphologyMetaArch
 
 
-def random_reference(trained: MorphologyMetaArch, seed: int):
-    """Recreate initialization, copying only frozen input calibration statistics."""
+def random_reference(trained, seed: int):
+    """Use a saved initial encoder or recreate its seeded, calibrated initialization."""
+    if hasattr(trained, "reference"):
+        return copy.deepcopy(trained.reference).eval().requires_grad_(False)
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(seed)
         reference = MorphologyMetaArch(**dict(trained.hparams)).model
@@ -98,11 +101,12 @@ def prepare_cohorts(config, tracking_uri, train_slides):
     slides = slides[slides.nuclei_count >= 512]
     # The original main seeds NumPy before setup. Reproduce its slide split
     # explicitly, independently of feature extraction and probe RNG activity.
+    split_seed = config.data.get("split_seed")
     train, validation = train_test_split(
         slides,
         test_size=labeled.split_size,
         stratify=slides[labeled.split_stratify_col],
-        random_state=int(config.seed),
+        random_state=int(config.seed if split_seed is None else split_seed),
     )
     train = train[train.nuclei_count >= labeled.dataset.crop_size]
     hashes = {"train": cohort_hash(train), "validation": cohort_hash(validation)}
@@ -119,7 +123,8 @@ def prepare_cohorts(config, tracking_uri, train_slides):
 
 @torch.inference_mode()
 def extract(sample, trained, reference, config, precision):
-    packed = inference_collate_fn(
+    collate = getattr(trained, "labeled_collate_fn", inference_collate_fn)
+    packed = collate(
         [sample], config.data.block_size, config.data.k, config.data.max_sequence_length
     )
     device = next(trained.parameters()).device
@@ -131,21 +136,20 @@ def extract(sample, trained, reference, config, precision):
         learned = trained(batch)
         initial = reference(batch)
     score = batch["score"]
-    features = {
-        name: value[score].float().cpu().numpy() for name, value in learned.items()
+    combined = {
+        **learned,
+        "random_intrinsic": initial["intrinsic"],
+        "random_contextual": initial["contextual"],
     }
-    features.update(
-        {
-            "random_intrinsic": initial["intrinsic"][score].float().cpu().numpy(),
-            "random_contextual": initial["contextual"][score].float().cpu().numpy(),
-        }
-    )
+    features = {
+        name: value[score].float().cpu().numpy() for name, value in combined.items()
+    }
     # Evaluate saved online heads in FP32 to avoid BF16 sigmoid probability ties.
     online = {}
     with torch.autocast("cuda", enabled=False):
         for name, head in trained.probes.items():
             online[name] = (
-                head(learned[name][score].float()).float().cpu().numpy().ravel()
+                head(combined[name][score].float()).float().cpu().numpy().ravel()
             )
     return (
         features,
@@ -241,7 +245,7 @@ def main():
         parser.error("Sample sizes, iterations and regularization must be positive")
     if not torch.cuda.is_available():
         parser.error(
-            "Run this evaluator on the data/GPU host: production FlexAttention requires CUDA"
+            "Run this evaluator on the data/GPU host; whole-cohort evaluation expects CUDA"
         )
     torch.set_float32_matmul_precision("high")
     client = MlflowClient(tracking_uri=args.tracking_uri)
@@ -254,8 +258,9 @@ def main():
             args.run_id, args.checkpoint_artifact, directory
         )
         config = OmegaConf.load(configuration)
+        model_type = get_class(config.model._target_)
         trained = (
-            MorphologyMetaArch.load_from_checkpoint(
+            model_type.load_from_checkpoint(
                 checkpoint, map_location="cpu", weights_only=True
             )
             .eval()

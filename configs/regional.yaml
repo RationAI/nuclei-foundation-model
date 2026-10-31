@@ -1,0 +1,96 @@
+defaults:
+  - base
+  - _self_
+
+seed: 0
+mode: fit
+checkpoint: null
+
+metadata:
+  run_name: Masked physical regions
+  description: Hidden coordinates and shapes, multiscale geometry targets, matched random and local-summary controls
+
+model:
+  _target_: nfm.regional_meta_arch.RegionalMetaArch
+  dim: 256
+  hidden_dim: 1024
+  num_heads: 8
+  num_layers: 8
+  efd_order: 16
+  intrinsic_dim: 128
+  grid_size: 8
+  tile_size_um: 64
+  fine_bins: 8
+  inference_window_batch: 32
+  lr: 0.0003
+  probe_lr: 0.001
+  warmup_steps: 100
+  normalization_batches: 16
+  noise_std: 0.05
+  occupancy_weight: 1.0
+  morphology_weight: 0.25
+  intrinsic_weight: 1.0
+
+trainer:
+  devices: 1
+  max_steps: 3000
+  max_epochs: -1
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  log_every_n_steps: 10
+  val_check_interval: 500
+  check_val_every_n_epoch: null
+  num_sanity_val_steps: 0
+  callbacks:
+    model_checkpoint:
+      _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      save_top_k: 1
+      save_last: true
+      every_n_train_steps: 500
+      monitor: validation/contextual_AUPRC
+      mode: max
+
+data:
+  _target_: nfm.data.regional.RegionalDataModule
+  max_sequence_length: 131072
+  block_size: 128
+  k: 16
+  ssl_holdout_fraction: 0.02
+  ssl_validation_slides: 64
+  split_seed: ${seed}
+  datasets:
+    unlabeled:
+      slides_path: ${project_path}/train_all_mpp_corrected.parquet
+      batch_size: 16
+      num_workers: 16
+      eval_num_workers: 2
+      dataset:
+        _target_: nfm.data.datasets.regional_dataset.RegionalNucleiDataset
+        nuclei_path: ${project_path}/cells
+        grid_size: ${model.grid_size}
+        tile_size_um: ${model.tile_size_um}
+        fine_bins: ${model.fine_bins}
+        efd_order: ${model.efd_order}
+        mask_ratio: 0.4
+        mask_block_size: 2
+        initial_query: 4096
+        max_query: 262144
+        max_cells: 32768
+    labeled:
+      slides_path: mlflow-artifacts:/37/5b9c6f096026425fa2b04c4e74b7a6f3/artifacts/panda/slides_mapping_train.parquet
+      split_size: 0.2
+      split_stratify_col: gleason_score
+      batch_size: 32
+      num_workers: 16
+      eval_num_workers: 8
+      sampler:
+        _target_: nfm.data.samplers.AutoWeightedRandomSampler
+        positivity_thr: 0.05
+        replacement: true
+        pos_slide_ratio: 0.75
+      dataset:
+        _target_: nfm.data.datasets.ClassificationNucleiDataset
+        annotation_path: /mnt/projects/nuclei_based_wsi_analysis/nuclei_supervision/PANDA/Radboud/annotation
+        crop_size: 4096
+        alpha: 0.8
+        efd_order: ${model.efd_order}

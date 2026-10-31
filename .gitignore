@@ -166,6 +166,7 @@ cython_debug/
 mlruns/
 mlflow_store/
 mlflow_artifacts/
+/artifacts/nucleus_ssl/frozen_benchmark/
 
 # Pytorch Lightning
 lightning_logs/

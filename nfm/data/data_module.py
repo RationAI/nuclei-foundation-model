@@ -132,15 +132,22 @@ def morphology_collate_fn(
 
 class DataModule(LightningDataModule):
     ssl_collate_fn = staticmethod(train_collate_fn)
+    labeled_collate_fn = staticmethod(inference_collate_fn)
 
     def __init__(
-        self, datasets: DictConfig, block_size: int, k: int, max_sequence_length: int
+        self,
+        datasets: DictConfig,
+        block_size: int,
+        k: int,
+        max_sequence_length: int,
+        split_seed: int | None = None,
     ) -> None:
         super().__init__()
         self.block_size = block_size
         self.k = k
         self.datasets = datasets
         self.max_sequence_length = max_sequence_length
+        self.split_seed = split_seed
 
     def prepare_data(self) -> None:
         for dataset in self.datasets.values():
@@ -155,6 +162,7 @@ class DataModule(LightningDataModule):
             slides,
             test_size=labeled.split_size,
             stratify=slides[labeled.split_stratify_col],
+            random_state=self.split_seed,
         )
         # Training keeps the configured fixed-count crops and positive seeding.
         # Validation always reads every nucleus, even when it exceeds the
@@ -178,10 +186,12 @@ class DataModule(LightningDataModule):
                     sampler=SourceBalancedRandomSampler(self.train),
                     drop_last=True,
                     num_workers=self.datasets.unlabeled.num_workers,
-                    persistent_workers=True,
+                    persistent_workers=self.datasets.unlabeled.num_workers > 0,
                     pin_memory=True,
                     in_order=False,
-                    multiprocessing_context="spawn",  # for lance
+                    multiprocessing_context="spawn"
+                    if self.datasets.unlabeled.num_workers
+                    else None,
                     collate_fn=partial(
                         self.ssl_collate_fn,
                         block_size=self.block_size,
@@ -197,11 +207,11 @@ class DataModule(LightningDataModule):
                     ),
                     drop_last=True,
                     num_workers=self.datasets.labeled.num_workers,
-                    persistent_workers=True,
+                    persistent_workers=self.datasets.labeled.num_workers > 0,
                     pin_memory=True,
                     in_order=False,
                     collate_fn=partial(
-                        inference_collate_fn,
+                        self.labeled_collate_fn,
                         block_size=self.block_size,
                         k=self.k,
                         max_sequence_length=self.max_sequence_length,
@@ -216,11 +226,11 @@ class DataModule(LightningDataModule):
             self.validation,
             batch_size=1,
             num_workers=self.datasets.labeled.eval_num_workers,
-            persistent_workers=True,
+            persistent_workers=self.datasets.labeled.eval_num_workers > 0,
             pin_memory=True,
             in_order=False,
             collate_fn=partial(
-                inference_collate_fn,
+                self.labeled_collate_fn,
                 block_size=self.block_size,
                 k=self.k,
                 max_sequence_length=self.max_sequence_length,
