@@ -22,5 +22,11 @@ trainer:
 
 model:
   warmup_steps: 1000
-  lamb: 0.2
-  n_concepts: 256
+  regularizer: sigreg
+  regularizer_weight: null
+  slices: 256
+  projector_dim: 128
+  alignment_level: nucleus
+
+data:
+  max_sequence_length: 131072

@@ -247,11 +247,7 @@ class AffineSkew:
 class RandomDrop:
     """Randomly drop a fraction of nuclei from the crop.
 
-    A random subset of polygons is removed.  The output length is therefore
-    variable, which means downstream ``sample_crops`` indices become stale if
-    this transform is used inside :meth:`NucleiDataset.__getitem__`.  It is
-    most useful in isolated testing or in a pipeline that re-computes crops
-    after dropping.
+    Drop aligned labels/IDs with polygons so correspondences remain valid.
     """
 
     def __init__(self, p: float = 0.05) -> None:
@@ -260,15 +256,18 @@ class RandomDrop:
         self.p = p
 
     def __call__(
-        self, polygons: NDArray[np.float32], labels: NDArray[np.float32]
+        self, polygons: NDArray[np.float32], **kwargs
     ) -> dict[str, NDArray[np.float32]]:
         n = polygons.shape[0]
         n_keep = max(1, int(n * (1 - self.p)))
         if n_keep >= n or np.random.rand() < 0.5:
-            return {"polygons": polygons, "labels": labels}
+            return {"polygons": polygons, **kwargs}
 
         keep = np.random.choice(n, n_keep, replace=False)
-        return {"polygons": polygons[keep], "labels": labels[keep]}
+        return {
+            "polygons": polygons[keep],
+            **{key: value[keep] for key, value in kwargs.items()},
+        }
 
 
 class ClusterDrop:
@@ -285,12 +284,12 @@ class ClusterDrop:
         self.p = p
 
     def __call__(
-        self, polygons: NDArray[np.float32], labels: NDArray[np.float32]
+        self, polygons: NDArray[np.float32], **kwargs
     ) -> dict[str, NDArray[np.float32]]:
         n = polygons.shape[0]
         n_drop = min(n - 1, int(n * self.p))
         if n_drop <= 0 or np.random.rand() < 0.5:
-            return {"polygons": polygons, "labels": labels}
+            return {"polygons": polygons, **kwargs}
 
         centroids = polygons.mean(axis=1)
         start = int(np.random.randint(0, n))
@@ -298,7 +297,10 @@ class ClusterDrop:
         drop = np.argpartition(distances, n_drop - 1)[:n_drop]
         mask = np.ones(n, dtype=bool)
         mask[drop] = False
-        return {"polygons": polygons[mask], "labels": labels[mask]}
+        return {
+            "polygons": polygons[mask],
+            **{key: value[mask] for key, value in kwargs.items()},
+        }
 
 
 class Compose:

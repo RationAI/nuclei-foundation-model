@@ -1,13 +1,12 @@
+"""Nucleus correspondence SSL and a continuously trained, detached linear probe."""
+
+import math
 from typing import Any
 
 import torch
 import torch.nn.functional as F
-from einops import rearrange
 from lightning import LightningModule
-from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from torch import Tensor, nn
-from torch.nn.attention.flex_attention import BlockMask
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torchmetrics import MetricCollection
 from torchmetrics.classification import (
     BinaryAUROC,
@@ -17,44 +16,33 @@ from torchmetrics.classification import (
 )
 
 from nfm.configuration import Config
+from nfm.modeling.objectives import NucleusObjective
 from nfm.modeling.transformer import NFM
-
-
-# from nfm.modeling.concepts_loss import SpatialConceptLoss
 
 
 class SSLMetaArch(LightningModule):
     def __init__(
         self,
-        warmup_steps: int,
-        lamb: float,
-        n_concepts: int,
-        lr: float = 0.0005,
+        warmup_steps: int = 1000,
+        lr: float = 0.0003,
+        regularizer: str = "sigreg",
+        regularizer_weight: float | None = None,
+        slices: int = 256,
+        projector_dim: int = 128,
+        weight_decay: float = 0.05,
         **config: Any,
     ) -> None:
         super().__init__()
-        self.warmup_steps = warmup_steps
         self.lr = lr
-        self.lamb = lamb
-
+        self.warmup_steps = warmup_steps
+        self.weight_decay = weight_decay
         self.config = Config(**config)
         self.model = NFM(self.config)
-        self.model.compile()
-        # self.scl = SpatialConceptLoss(self.config.dim, n_concepts)
+        self.proj = nn.Sequential(
+            nn.Linear(self.config.dim, 512), nn.GELU(), nn.Linear(512, projector_dim)
+        )
+        self.objective = NucleusObjective(regularizer, regularizer_weight, slices)
         self.probe = nn.Linear(self.config.dim, 1)
-
-        # self.proj = MLP(
-        #     self.config.dim,
-        #     hidden_channels=[2048, 2048, 256],
-        #     norm_layer=nn.BatchNorm1d,
-        # )
-        # self.batch_norm = nn.BatchNorm1d(256, affine=False)
-
-        # univariate_test = lejepa.univariate.EppsPulley(n_points=17)
-        # self.sigreg_loss = lejepa.multivariate.SlicingUnivariateTest(
-        #     univariate_test=univariate_test, num_slices=1024
-        # )
-
         self.val_metrics = MetricCollection(
             {
                 "precision": BinaryPrecision(),
@@ -65,114 +53,135 @@ class SSLMetaArch(LightningModule):
             prefix="validation/",
         )
 
-    def forward(
-        self, x: Tensor, pos: Tensor, block_mask: BlockMask, seq_len: int
-    ) -> Tensor:
-        return self.model(x, pos, block_mask, seq_len)[:seq_len]
+    def forward(self, batch) -> Tensor:
+        return self.model(batch["efds"], batch["pos"], batch["block_mask"])
 
     def forward_unlabeled(self, batch: dict[str, Any]) -> Tensor:
-        all_embed = self(
-            batch["efds"], batch["pos"], batch["block_mask"], batch["seq_lens"].sum()
+        embeddings = self(batch)
+        matched = embeddings[batch["pair_indices"]]  # [view, total matches, dim]
+        counts = batch["pair_counts"]
+        region_ids = torch.repeat_interleave(
+            torch.arange(len(counts), device=counts.device), counts
         )
+        means = matched.float().new_zeros(2, len(counts), matched.shape[-1])
+        means.index_add_(1, region_ids, matched.float())
+        means = means / counts.clamp_min(1)[None, :, None]
+        nonempty = counts > 0
 
-        crops = torch.split(all_embed, batch["seq_lens"], dim=0)
-        all_proj = self.batch_norm(
-            self.proj(torch.stack([c.mean(dim=0) for c in crops]))
-        )
-        all_proj = rearrange(all_proj, "(b n) d -> b n d", n=8)
-        batch_size = all_proj.shape[0]
-
-        centers = all_proj[:, :2].mean(dim=1, keepdim=True)
-        inv_loss = (all_proj - centers).square().mean()
-        sigreg_loss = self.sigreg_loss(all_proj)
-        lejepa_loss = sigreg_loss * self.lamb + inv_loss * (1 - self.lamb)
-
-        self.log(
-            "train/sigreg_loss",
-            sigreg_loss,
-            rank_zero_only=True,
-            batch_size=batch_size,
-            prog_bar=True,
-        )
-        self.log("train/inv_loss", inv_loss, rank_zero_only=True, batch_size=batch_size)
-        self.log(
-            "train/total_loss",
-            lejepa_loss,
-            rank_zero_only=True,
-            prog_bar=True,
-            on_epoch=True,
-            batch_size=batch_size,
-        )
-
-        return lejepa_loss
+        projected = self.proj(matched)
+        loss, components = self.objective(projected)
+        size = len(batch["slide_ids"])
+        for name, value in components.items():
+            self.log(f"train/{name}", value, batch_size=size)
+        self.log("train/ssl_loss", loss, batch_size=size, prog_bar=True)
+        with torch.no_grad():
+            self.log(
+                "train/projector_std",
+                projected.float().std(1, unbiased=False).mean()
+                if projected.shape[1]
+                else projected.new_zeros(()),
+                batch_size=size,
+            )
+            residual = (
+                embeddings[batch["pair_indices"]].float() - means[:, region_ids].float()
+            )
+            self.log(
+                "train/within_region_std",
+                residual.square().mean().sqrt()
+                if residual.numel()
+                else residual.new_zeros(()),
+                batch_size=size,
+            )
+            occupied = means[:, nonempty].float()
+            self.log(
+                "train/between_region_std",
+                occupied.var(1, unbiased=False).mean().sqrt()
+                if occupied.shape[1]
+                else occupied.new_zeros(()),
+                batch_size=size,
+            )
+            self.log("train/matched_nuclei", counts.sum().float(), batch_size=size)
+            self.log("train/matches_per_region", counts.float().mean(), batch_size=size)
+            self.log(
+                "train/empty_intersections",
+                (counts == 0).sum().float(),
+                batch_size=size,
+            )
+            self.log(
+                "train/unique_slides",
+                float(len(set(batch["slide_ids"]))),
+                batch_size=size,
+            )
+            self.log("train/tokens", float(len(batch["efds"])), batch_size=size)
+        return loss
 
     def forward_labeled(self, batch: dict[str, Any]) -> Tensor:
-        # with torch.no_grad():
-        embed = self(
-            batch["efds"], batch["pos"], batch["block_mask"], batch["labels"].shape[0]
-        )
+        # Probe labels must not influence encoder weights OR BN running stats.
+        was_training = self.model.training
+        self.model.eval()
+        with torch.no_grad():
+            embeddings = self(batch)
+        self.model.train(was_training)
 
-        probe_labels = self.probe(embed)
-
-        probe_loss = F.binary_cross_entropy_with_logits(probe_labels, batch["labels"])
-
+        score = batch["score"]
+        logits = self.probe(embeddings[score])
+        loss = F.binary_cross_entropy_with_logits(logits, batch["labels"][score])
         self.log(
             "train/probe_loss",
-            probe_loss,
-            prog_bar=True,
+            loss,
+            on_step=True,
             on_epoch=True,
-            batch_size=batch["labels"].numel(),
+            prog_bar=True,
+            batch_size=int(score.sum()),
         )
-        return probe_loss
+        return loss
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
-        # unsupervised_loss = self.forward_unlabeled(batch["unlabeled"])
-        supervised_loss = self.forward_labeled(batch.get("labeled", batch))
-        return supervised_loss
+        ssl = self.forward_unlabeled(batch["unlabeled"])
+        probe = self.forward_labeled(batch["labeled"])
+        loss = ssl + probe
+        self.log(
+            "train/total_loss", loss, batch_size=len(batch["unlabeled"]["slide_ids"])
+        )
+        return loss
 
     def validation_step(self, batch: dict[str, Any]) -> None:
-        embed = self(
-            batch["efds"], batch["pos"], batch["block_mask"], batch["labels"].shape[0]
-        )
-
-        probe_labels = self.probe(embed)
-
-        probe_loss = F.binary_cross_entropy_with_logits(probe_labels, batch["labels"])
-        self.val_metrics(torch.sigmoid(probe_labels), batch["labels"].long())
+        embeddings = self(batch)
+        logits = self.probe(embeddings)
+        loss = F.binary_cross_entropy_with_logits(logits, batch["labels"])
+        self.val_metrics.update(logits.sigmoid(), batch["labels"].long())
         self.log(
-            "validation/probe_loss",
-            probe_loss,
-            on_epoch=True,
-            sync_dist=True,
-            prog_bar=True,
-            batch_size=batch["labels"].numel(),
+            "validation/probe_loss", loss, on_epoch=True, sync_dist=True, batch_size=1
         )
-        self.log_dict(
-            self.val_metrics, on_epoch=True, batch_size=batch["labels"].numel()
+        self.log_dict(self.val_metrics, on_epoch=True, batch_size=1)
+
+    def configure_optimizers(self):
+        # Keep module registration order so checkpoint state maps to the same
+        # parameters when a new model instance restores the optimizer.
+        decay, no_decay = [], []
+        for name, parameter in self.named_parameters():
+            group = no_decay if parameter.ndim <= 1 or ".rope." in name else decay
+            group.append(parameter)
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": decay},
+                {"params": no_decay, "weight_decay": 0},
+            ],
+            lr=self.lr,
+            weight_decay=self.weight_decay,
         )
+        # Native Python floats keep optimizer checkpoints weights_only-loadable.
+        total = max(int(self.trainer.estimated_stepping_batches), 1)
+        warmup = min(self.warmup_steps, max(total - 1, 0))
 
-    def configure_optimizers(self) -> OptimizerLRScheduler:
-        no_decay_params = [
-            w for n, w in self.named_parameters() if w.ndim == 1 or ".rope." in n
-        ]
-        decay_params = [p for p in self.parameters() if p not in set(no_decay_params)]
-        params = [
-            {"params": decay_params},
-            {"params": no_decay_params, "weight_decay": 0},
-        ]
+        def schedule(step):
+            if step < warmup:
+                return 0.01 + 0.99 * step / max(warmup, 1)
+            progress = min((step - warmup) / max(total - warmup, 1), 1.0)
+            return 0.5 * (1 + math.cos(math.pi * progress))
 
-        optimizer = torch.optim.AdamW(params, lr=self.lr, weight_decay=0.05)
-
-        s1 = LinearLR(optimizer, start_factor=0.01, total_iters=self.warmup_steps)
-        s2 = CosineAnnealingLR(
-            optimizer,
-            T_max=self.trainer.estimated_stepping_batches - self.warmup_steps,
-            eta_min=1e-6,
-        )
-        scheduler = SequentialLR(
-            optimizer, schedulers=[s1, s2], milestones=[self.warmup_steps]
-        )
-
-        return [optimizer], [
-            {"scheduler": scheduler, "interval": "step", "frequency": 1}
-        ]
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
+        }

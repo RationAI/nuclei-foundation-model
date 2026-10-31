@@ -39,7 +39,9 @@ class ClassificationNucleiDataset(NucleiDataset):
 
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
-        nuclei = pd.read_parquet(slide.slide_nuclei_path).sort_values("id")
+        nuclei = pd.read_parquet(
+            slide.slide_nuclei_path, columns=["id", "centroid", "polygon"]
+        ).sort_values("id")
         mpps = np.array([slide.mpp_x, slide.mpp_y], dtype=np.float32)
         points = np.stack(nuclei["centroid"]).astype(np.float32) * mpps
         labels = (
@@ -87,5 +89,5 @@ class ClassificationNucleiDataset(NucleiDataset):
             "pos": centroids,
             "efds": torch.from_numpy(efds),
             "labels": torch.from_numpy(labels[indices])[:, None],
-            "seq_len": len(centroids),
+            "slide_id": str(slide.slide_id),
         }

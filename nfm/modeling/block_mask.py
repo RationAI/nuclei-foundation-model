@@ -12,9 +12,11 @@ from torch.utils._pytree import tree_map_only
 
 
 class _MaskMod(nn.Module):
-    def __init__(self, doc_ids: Tensor) -> None:
+    def __init__(self, doc_ids: Tensor, max_sequence_length: int) -> None:
         super().__init__()
-        self.register_buffer("doc_ids", doc_ids)
+        self.register_buffer(
+            "doc_ids", F.pad(doc_ids, (0, max_sequence_length - len(doc_ids)), value=-1)
+        )
 
     def __call__(self, b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
         # If the tokens don't belong to the same document, zero out the attention.
@@ -35,9 +37,10 @@ class BlockMask(torch.nn.attention.flex_attention.BlockMask):
 def create_ragged_block_quantized_knn_mask(
     neighbor_indices_list: list[Tensor],
     block_size: int,
-    total_seq_len: int | None = None,
+    *,
+    max_sequence_length: int,
 ) -> BlockMask:
-    """Creates a BlockMask for tightly packed sequences, optionally padded."""
+    """Use the packed length for attention and a fixed capacity for doc_ids."""
     device = neighbor_indices_list[0].device
 
     # === 1. Tightly Pack & Shift KNN Indices ===
@@ -65,20 +68,16 @@ def create_ragged_block_quantized_knn_mask(
     packed_neighbors = torch.cat(packed_neighbors_list, dim=0)  # (N_total, K)
     doc_ids = torch.cat(doc_ids_list, dim=0)  # (N_total,)
 
-    N_real, K = packed_neighbors.shape
-    if total_seq_len is None:
-        total_seq_len = N_real
-    if total_seq_len < N_real:
+    seq_len, K = packed_neighbors.shape
+    if seq_len > max_sequence_length:
         raise ValueError(
-            f"total_seq_len ({total_seq_len}) must be >= packed length ({N_real})"
+            f"Packed length {seq_len} exceeds doc_ids capacity {max_sequence_length}"
         )
-    doc_ids = F.pad(doc_ids, (0, total_seq_len - N_real), value=-1)
-
-    num_blocks = math.ceil(total_seq_len / block_size)
+    num_blocks = math.ceil(seq_len / block_size)
 
     # === 2. Build Global Adjacency Matrix (2D) ===
     # Map token-level connections to block-level connections
-    q_idx = torch.arange(N_real, device=device)
+    q_idx = torch.arange(seq_len, device=device)
     q_block_ids = repeat(q_idx // block_size, "n -> n k", k=K)
     kv_block_ids = packed_neighbors // block_size
 
@@ -103,11 +102,13 @@ def create_ragged_block_quantized_knn_mask(
     kv_indices[kv_indices > num_blocks] = -1  # Demote invalid connections to -1
 
     # === 4. Optimize Fast Path (Pure vs Mixed Blocks) ===
-    padded_doc_ids = F.pad(
-        doc_ids, (0, num_blocks * block_size - total_seq_len), value=-2
+    # This temporary block view only classifies full vs partial blocks. The
+    # attention sequence remains at its actual length.
+    block_doc_ids = F.pad(
+        doc_ids, (0, num_blocks * block_size - seq_len), value=-2
     ).view(num_blocks, block_size)
-    is_pure_block = (padded_doc_ids == padded_doc_ids[:, :1]).all(dim=1)
-    is_pure_block &= padded_doc_ids[:, 0] >= 0
+    is_pure_block = (block_doc_ids == block_doc_ids[:, :1]).all(dim=1)
+    is_pure_block &= block_doc_ids[:, 0] >= 0
 
     valid_kv_mask = kv_indices >= 0
     safe_kv_indices = torch.where(valid_kv_mask, kv_indices, 0)
@@ -152,8 +153,8 @@ def create_ragged_block_quantized_knn_mask(
         full_kv_num_blocks=full_kv_num_blocks.view(1, 1, num_blocks),
         full_kv_indices=full_kv_indices.view(1, 1, num_blocks, num_blocks),
         BLOCK_SIZE=(block_size, block_size),
-        mask_mod=_MaskMod(doc_ids),
-        seq_lengths=(total_seq_len, total_seq_len),
+        mask_mod=_MaskMod(doc_ids, max_sequence_length),
+        seq_lengths=(seq_len, seq_len),
     )
 
 

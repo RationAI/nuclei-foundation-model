@@ -41,7 +41,7 @@ def normalize_efd_for_starting_point(
     )
     if np.any(pi_mask):
         rotated[pi_mask] = _phase_shift_efd(
-            coeffs[mask & pi_mask], theta[pi_mask] + np.pi, harmonic_indices
+            coeffs[mask][pi_mask], theta[pi_mask] + np.pi, harmonic_indices
         )
 
     coeffs[mask] = rotated
@@ -58,12 +58,18 @@ def elliptic_fourier_descriptors(
             each with M points in 2D.
         order: The order of Fourier coefficients to calculate.
     """
+    if contour.ndim != 3 or contour.shape[1] < 3 or order < 1:
+        raise ValueError("Expected (N, M>=3, 2) contours and a positive EFD order")
+    if not np.isfinite(contour).all():
+        raise ValueError("Contour coordinates must be finite")
     contour = np.concatenate((contour, contour[:, :1]), axis=1)
 
     dxy = np.diff(contour, axis=1)
     dt = np.linalg.norm(dxy, axis=2)
     t = np.concatenate([np.zeros((contour.shape[0], 1)), np.cumsum(dt, axis=1)], axis=1)
     T = t[:, -1:, None]
+    if np.any(np.finfo(np.float64).eps >= T):
+        raise ValueError("Cannot encode a contour with zero perimeter")
 
     orders = np.arange(1, order + 1)[None, :, None]
     consts = T / (2 * orders**2 * np.pi**2)
@@ -72,7 +78,9 @@ def elliptic_fourier_descriptors(
     d_cos_phi = np.cos(phi[..., 1:]) - np.cos(phi[..., :-1])
     d_sin_phi = np.sin(phi[..., 1:]) - np.sin(phi[..., :-1])
 
-    dxy_norm = dxy / dt[..., None]
+    dxy_norm = np.divide(
+        dxy, dt[..., None], out=np.zeros_like(dxy), where=dt[..., None] > 0
+    )
 
     a = np.sum(dxy_norm[:, None, :, 0] * d_cos_phi, axis=2)
     b = np.sum(dxy_norm[:, None, :, 0] * d_sin_phi, axis=2)

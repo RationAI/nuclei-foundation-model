@@ -1,15 +1,13 @@
 import torch
-import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
-from torchvision.ops import MLP
 
 from nfm.configuration import Config
 from nfm.modeling.layers import FeedForward, RoVE
 
 
-flex_attention = torch.compile(flex_attention)
+flex_attention = torch.compile(flex_attention, dynamic=True)
 
 
 class SelfAttention(nn.Module):
@@ -33,11 +31,7 @@ class SelfAttention(nn.Module):
         k = self.k_norm(k)
         v = self.v_norm(v)
         q, k, v = self.rope(q, pos), self.rope(k, pos), self.rope(v, pos)
-        if isinstance(block_mask, Tensor):
-            # Explicit small-sequence reference backend for CPU checks.
-            x = F.scaled_dot_product_attention(q, k, v, attn_mask=block_mask)
-        else:
-            x = flex_attention(query=q, key=k, value=v, block_mask=block_mask)
+        x = flex_attention(query=q, key=k, value=v, block_mask=block_mask)
         x = self.rope(x, pos, inverse=True)
         x = rearrange(x, "b h n d -> b n (h d)")
 
@@ -89,26 +83,19 @@ class Transformer(nn.Module):
 class NFM(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
-        self.bn = nn.BatchNorm1d(4 * config.efd_order, affine=False)
+        input_dim = 4 * config.efd_order
+        self.bn = nn.BatchNorm1d(input_dim, affine=False)
         self.backbone = Transformer(config)
-        self.polygon_proj = nn.Linear(4 * config.efd_order, config.dim)
-        self.position_encoder = MLP(
-            2, [config.dim, config.dim], activation_layer=nn.SiLU
-        )
+        self.polygon_proj = nn.Linear(input_dim, config.dim)
 
-    def forward(
-        self, x: Tensor, pos: Tensor, block_mask: BlockMask, seq_len: int
-    ) -> Tensor:
+    def forward(self, x: Tensor, pos: Tensor, block_mask: BlockMask) -> Tensor:
         """Forward pass of the Transformer model.
 
         Args:
             x: Target sequence of shape (n, d)
             pos: Target positions of shape (n, 2)
             block_mask: Block mask for attention
-            seq_len: Length of the target sequence
         """
-        normalized = torch.zeros_like(x)
-        normalized[:seq_len] = self.bn(x[:seq_len])
+        intrinsic = self.polygon_proj(self.bn(x))
 
-        x = self.polygon_proj(normalized)
-        return self.backbone(x[None], pos[None], block_mask).squeeze(0)
+        return self.backbone(intrinsic[None], pos[None], block_mask).squeeze(0)
