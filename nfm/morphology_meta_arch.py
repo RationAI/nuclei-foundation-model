@@ -42,6 +42,7 @@ class MorphologyMetaArch(LightningModule):
             raise ValueError("Require calibration batches and a mask ratio in (0, 1)")
         if noise_std < 0 or context_weight < 0 or efd_order < 1:
             raise ValueError("Invalid corruption, loss weight, or EFD order")
+        self.save_hyperparameters()
         architecture = Config(
             dim=dim,
             hidden_dim=hidden_dim,
