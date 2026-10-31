@@ -167,7 +167,9 @@ class RegionalEncoder(nn.Module):
         bounds = F.pad(lengths.cumsum(0), (1, 0)).cpu().tolist()
         raw = self.standardizer(efds)
         intrinsic = self.shape_encoder(raw)
-        contextual = intrinsic.new_empty(len(raw), self.dim)
+        # CUDA autocast can emit BF16 shapes but FP32 normalized context.
+        # Preserve the latter precision when scattering back into nucleus order.
+        contextual = raw.new_empty(len(raw), self.dim)
         summaries = raw.new_empty(len(raw), self.summary_dim - raw.shape[-1])
         regional, population = [], []
         for start in range(0, len(keys), self.inference_window_batch):
@@ -182,7 +184,7 @@ class RegionalEncoder(nn.Module):
             )
             for layer in self.layers:
                 tokens = layer(tokens)
-            tokens = self.norm(tokens)
+            tokens = self.norm(tokens).float()
             contextual[keep] = tokens.flatten(0, 1)[patch_ids]
             summaries[keep] = summary.flatten(0, 1)[patch_ids]
             if return_regions:
