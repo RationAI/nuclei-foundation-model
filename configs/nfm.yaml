@@ -7,11 +7,11 @@ mode: ???
 checkpoint: null
 
 trainer:
-  max_steps: 100000
+  max_steps: 20000
   max_epochs: -1
   precision: bf16-mixed
   log_every_n_steps: 10
-  val_check_interval: 2000
+  val_check_interval: 1000
   check_val_every_n_epoch: null
   num_sanity_val_steps: 0
   callbacks:
@@ -20,7 +20,7 @@ trainer:
       # Keep every validation checkpoint. A limited top k writes nothing, not even
       # last, unless the metric improves. Without a monitor the MLflow logger
       # deletes all but the newest one.
-      save_top_k: -1
+      save_top_k: 3
       save_last: true
       monitor: validation/probe_loss
       mode: min
