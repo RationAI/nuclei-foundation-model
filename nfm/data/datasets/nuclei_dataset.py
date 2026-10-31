@@ -25,7 +25,7 @@ class NucleiDataset(Dataset[NDArray[np.uint8]]):
         augmentation: Callable[..., dict[str, NDArray[np.uint8]]],
         views: int = 4,
         field: float = 128.0,
-        size: int = 128,
+        size: int = 224,
         region_nuclei: int = 512,
     ) -> None:
         self.slides = slides.reset_index(drop=True)

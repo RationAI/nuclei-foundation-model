@@ -18,8 +18,9 @@ from nfm.modeling.sigreg import SIGReg
 class SSLMetaArch(LightningModule):
     def __init__(
         self,
-        backbone: str = "vit_small_patch8_224",
-        image_size: int = 128,
+        backbone: str = "vit_small_patch16_224",
+        patch_size: int = 14,
+        image_size: int = 224,
         embed_dim: int = 512,
         projector_dim: int = 16,
         drop_path_rate: float = 0.1,
@@ -39,6 +40,7 @@ class SSLMetaArch(LightningModule):
             backbone,
             pretrained=False,
             in_chans=1,
+            patch_size=patch_size,
             img_size=image_size,
             num_classes=embed_dim,
             drop_path_rate=drop_path_rate,
