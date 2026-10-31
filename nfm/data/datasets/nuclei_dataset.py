@@ -99,8 +99,8 @@ class NucleiDataset(Dataset[Sample]):
             disable_scoring_autoprojection=True,
         )
 
-        mpp = np.asarray([slide.mpp_x, slide.mpp_y], dtype=np.float64)
-        points = np.asarray(table["points"].to_pylist(), dtype=np.float64)
+        mpp = np.asarray([slide.mpp_x, slide.mpp_y], dtype=np.float32)
+        points = np.asarray(table["points"].to_pylist(), dtype=np.float32)
         radial_distances = np.asarray(
             table["radial_distances"].to_pylist(), dtype=np.float64
         )
@@ -108,8 +108,9 @@ class NucleiDataset(Dataset[Sample]):
         polygons = radial_polygons(points, radial_distances) * mpp
         points *= mpp
 
-        # The Delaunay implementation requires distinct positions. Retain the
-        # first persistent ID at each physical location, including the seed.
+        # Deduplicate in the graph builder's float32 representation: converting
+        # after deduplication can merge distinct float64 physical coordinates.
+        # Keep points, polygons and persistent IDs aligned through the selection.
         _, unique = np.unique(
             np.round(points / 1e-4).astype(np.int64), axis=0, return_index=True
         )
@@ -120,7 +121,7 @@ class NucleiDataset(Dataset[Sample]):
         )
 
         seed = int(np.argmin(np.linalg.norm(points - seed * mpp, axis=1)))
-        return points.astype(np.float32), polygons, ids, seed
+        return points, polygons, ids, seed
 
     def __getitem__(self, idx: int) -> Sample:
         slide = self.slides.iloc[idx]
