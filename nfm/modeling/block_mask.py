@@ -20,7 +20,12 @@ class _MaskMod(nn.Module):
 
     def __call__(self, b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
         # If the tokens don't belong to the same document, zero out the attention.
-        return (self.doc_ids[q] >= 0) & (self.doc_ids[q] == self.doc_ids[kv])
+        # FlexAttention may evaluate the rest of the final tile beyond capacity.
+        capacity = self.doc_ids.shape[0]
+        q_doc = self.doc_ids[q.clamp(0, capacity - 1)]
+        kv_doc = self.doc_ids[kv.clamp(0, capacity - 1)]
+        valid = (q >= 0) & (q < capacity) & (kv >= 0) & (kv < capacity)
+        return valid & (q_doc >= 0) & (q_doc == kv_doc)
 
 
 class BlockMask(torch.nn.attention.flex_attention.BlockMask):

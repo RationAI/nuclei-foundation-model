@@ -106,7 +106,33 @@ def inference_collate_fn(
     return packed
 
 
+def morphology_collate_fn(
+    batch: list[Sample], block_size: int, k: int, max_sequence_length: int
+) -> Batch:
+    packed, layout = _pack_crops(
+        [(sample["pos"], sample["efds"]) for sample in batch],
+        block_size,
+        k,
+        max_sequence_length,
+    )
+    packed.update(
+        morphology=torch.cat(
+            [
+                torch.as_tensor(sample["morphology"])[order]
+                for sample, (order, _) in zip(batch, layout, strict=True)
+            ]
+        ),
+        region_ids=torch.repeat_interleave(
+            torch.arange(len(batch)), torch.tensor([len(order) for order, _ in layout])
+        ),
+        slide_ids=[sample["slide_id"] for sample in batch],
+    )
+    return packed
+
+
 class DataModule(LightningDataModule):
+    ssl_collate_fn = staticmethod(train_collate_fn)
+
     def __init__(
         self, datasets: DictConfig, block_size: int, k: int, max_sequence_length: int
     ) -> None:
@@ -157,7 +183,7 @@ class DataModule(LightningDataModule):
                     in_order=False,
                     multiprocessing_context="spawn",  # for lance
                     collate_fn=partial(
-                        train_collate_fn,
+                        self.ssl_collate_fn,
                         block_size=self.block_size,
                         k=self.k,
                         max_sequence_length=self.max_sequence_length,
@@ -200,3 +226,7 @@ class DataModule(LightningDataModule):
                 max_sequence_length=self.max_sequence_length,
             ),
         )
+
+
+class MorphologyDataModule(DataModule):
+    ssl_collate_fn = staticmethod(morphology_collate_fn)

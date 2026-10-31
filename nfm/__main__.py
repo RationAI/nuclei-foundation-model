@@ -18,9 +18,11 @@ def main(config: DictConfig, logger: Logger) -> None:
     data = hydra.utils.instantiate(
         config.data,
         _recursive_=False,  # to avoid instantiating all the datasets
-        _target_=DataModule,
+        _target_=config.data.get("_target_", DataModule),
     )
-    model = hydra.utils.instantiate(config.model, _target_=SSLMetaArch)
+    model = hydra.utils.instantiate(
+        config.model, _target_=config.model.get("_target_", SSLMetaArch)
+    )
 
     trainer = hydra.utils.instantiate(config.trainer, _target_=Trainer, logger=logger)
     getattr(trainer, config.mode)(model, datamodule=data, ckpt_path=config.checkpoint)

@@ -1,0 +1,81 @@
+defaults:
+  - base
+  - _self_
+
+seed: 0
+mode: fit
+checkpoint: null
+
+metadata:
+  run_name: Morphology retention and masked context
+  description: Fixed geometric targets, denoising intrinsic features, masked contextual prediction
+
+model:
+  _target_: nfm.morphology_meta_arch.MorphologyMetaArch
+  dim: 256
+  hidden_dim: 1024
+  num_heads: 8
+  num_layers: 4
+  efd_order: 16
+  intrinsic_dim: 128
+  lr: 0.0003
+  probe_lr: 0.001
+  warmup_steps: 100
+  normalization_batches: 16
+  mask_ratio: 0.3
+  noise_std: 0.05
+  context_weight: 1.0
+
+trainer:
+  devices: 1
+  max_steps: 3000
+  max_epochs: -1
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  log_every_n_steps: 10
+  val_check_interval: 500
+  check_val_every_n_epoch: null
+  num_sanity_val_steps: 0
+  callbacks:
+    model_checkpoint:
+      _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      save_top_k: 1
+      save_last: true
+      every_n_train_steps: 500
+      monitor: validation/contextual_AUPRC
+      mode: max
+
+data:
+  _target_: nfm.data.data_module.MorphologyDataModule
+  max_sequence_length: 131072
+  block_size: 128
+  k: 16
+  datasets:
+    unlabeled:
+      slides_path: ${project_path}/train_all_mpp_corrected.parquet
+      batch_size: 16
+      num_workers: 16
+      dataset:
+        _target_: nfm.data.datasets.morphology_dataset.MorphologyNucleiDataset
+        nuclei_path: ${project_path}/cells
+        crop_size: 2048
+        alpha: 0.85
+        efd_order: ${model.efd_order}
+    labeled:
+      slides_path: mlflow-artifacts:/37/5b9c6f096026425fa2b04c4e74b7a6f3/artifacts/panda/slides_mapping_train.parquet
+      split_size: 0.2
+      split_stratify_col: gleason_score
+      batch_size: 4
+      num_workers: 9
+      eval_num_workers: 10
+      sampler:
+        _target_: nfm.data.samplers.AutoWeightedRandomSampler
+        positivity_thr: 0.05
+        replacement: true
+        pos_slide_ratio: 0.75
+      dataset:
+        _target_: nfm.data.datasets.ClassificationNucleiDataset
+        annotation_path: /mnt/projects/nuclei_based_wsi_analysis/nuclei_supervision/PANDA/Radboud/annotation
+        crop_size: 4096
+        alpha: 0.8
+        efd_order: ${model.efd_order}
