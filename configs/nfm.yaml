@@ -17,10 +17,10 @@ trainer:
   callbacks:
     model_checkpoint:
       _target_: lightning.pytorch.callbacks.ModelCheckpoint
-      save_top_k: 1
+      # Keep every validation checkpoint: with a monitor, nothing is written
+      # (not even last) unless the monitored metric improves.
+      save_top_k: -1
       save_last: true
-      monitor: validation/probe_loss
-      mode: min
 
 model:
   backbone: vit_small_patch8_224
