@@ -15,32 +15,41 @@ def _to_numpy(column: FixedSizeListArray) -> NDArray[np.float32]:
     return flat.reshape(len(column), -1)
 
 
-class NucleiDataset(Dataset[NDArray[np.uint8]]):
-    """Multiple rendered views of a random tile from the whole cohort."""
+class NucleiDataset(Dataset[dict[str, NDArray[np.uint8]]]):
+    """Global and local views of a random region, rendered at a random resolution.
+
+    Follows the Virchow2 recipe: mixed magnification and extended-context
+    translation, where all views are crops of one larger context with minimal resizing.
+    """
 
     def __init__(
         self,
         slides: pd.DataFrame,
         nuclei_path: str,
-        augmentation: Callable[..., dict[str, NDArray[np.uint8]]],
-        views: int = 4,
-        field: float = 128.0,
-        size: int = 224,
-        region_nuclei: int = 512,
+        global_augmentation: Callable[..., dict[str, NDArray[np.uint8]]],
+        local_augmentation: Callable[..., dict[str, NDArray[np.uint8]]],
+        global_views: int = 2,
+        local_views: int = 8,
+        context_size: int = 392,
+        mpps: tuple[float, ...] = (0.25, 0.5, 1.0, 2.0),
+        mpp_weights: tuple[float, ...] = (0.2, 0.4, 0.2, 0.2),
+        max_density: float = 0.0125,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
         self.nuclei_path = nuclei_path
-        self.views = views
-        self.field = field
-        self.size = size
-        self.augmentation = augmentation
-        # Must cover a circle of radius field / sqrt(2) around the tile center.
-        self.region_nuclei = region_nuclei
+        self.global_augmentation = global_augmentation
+        self.local_augmentation = local_augmentation
+        self.global_views = global_views
+        self.local_views = local_views
+        self.context_size = context_size
+        self.mpps = mpps
+        self.mpp_weights = mpp_weights
+        self.max_density = max_density  # nuclei per um^2, sizes the region query
 
     def __len__(self) -> int:
         return len(self.slides)
 
-    def __getitem__(self, idx: int) -> NDArray[np.uint8]:
+    def __getitem__(self, idx: int) -> dict[str, NDArray[np.uint8]]:
         slide = self.slides.iloc[idx]
         ds = lance.dataset(
             f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}/nuclei.lance"
@@ -49,12 +58,15 @@ class NucleiDataset(Dataset[NDArray[np.uint8]]):
         seed = _to_numpy(
             ds.take([np.random.randint(count)], columns=["points"])["points"]
         )
+        field = self.context_size * np.random.choice(self.mpps, p=self.mpp_weights)
+        # The query is a circle that has to enclose the square context.
+        nuclei = int(self.max_density * np.pi * field**2 / 2)
         table = ds.to_table(
             columns=["points", "radial_distances"],
             nearest={
                 "column": "points",
                 "q": seed[0],
-                "k": min(count, self.region_nuclei),
+                "k": min(count, nuclei),
                 "metric": "euclidean",
             },
             disable_scoring_autoprojection=True,
@@ -69,13 +81,18 @@ class NucleiDataset(Dataset[NDArray[np.uint8]]):
         polygons = (points[:, None] + radii[..., None] * directions) * mpp
         polygons = polygons.astype(np.float32)
 
-        # Oversized so that any rotation still fills the final tile.
-        image = render(
-            polygons,
-            seed[0] * mpp,
-            self.field * np.sqrt(2),
-            int(np.ceil(self.size * np.sqrt(2))),
-        )
-        return np.stack(
-            [self.augmentation(image=image)["image"] for _ in range(self.views)]
-        )
+        context = render(polygons, seed[0] * mpp, field, self.context_size)
+        return {
+            "global": np.stack(
+                [
+                    self.global_augmentation(image=context)["image"]
+                    for _ in range(self.global_views)
+                ]
+            ),
+            "local": np.stack(
+                [
+                    self.local_augmentation(image=context)["image"]
+                    for _ in range(self.local_views)
+                ]
+            ),
+        }

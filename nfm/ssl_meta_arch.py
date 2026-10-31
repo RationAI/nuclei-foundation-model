@@ -18,14 +18,13 @@ from nfm.modeling.sigreg import SIGReg
 class SSLMetaArch(LightningModule):
     def __init__(
         self,
-        backbone: str = "vit_small_patch16_224",
-        patch_size: int = 14,
+        backbone: str = "vit_small_patch14_reg4_dinov2",
         image_size: int = 224,
         embed_dim: int = 512,
         projector_dim: int = 16,
-        drop_path_rate: float = 0.1,
+        drop_path_rate: float = 0.4,
         lamb: float = 0.02,
-        lr: float = 2e-3,
+        lr: float = 5e-4,
         probe_lr: float = 1e-3,
         weight_decay: float = 0.05,
         warmup_steps: int = 1000,
@@ -40,8 +39,8 @@ class SSLMetaArch(LightningModule):
             backbone,
             pretrained=False,
             in_chans=1,
-            patch_size=patch_size,
             img_size=image_size,
+            dynamic_img_size=True,  # for local views
             num_classes=embed_dim,
             drop_path_rate=drop_path_rate,
         )
@@ -59,11 +58,17 @@ class SSLMetaArch(LightningModule):
         return self.backbone((images.float() / 255 - 0.5) / 0.5)
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
-        views = batch["unlabeled"]  # [batch, views, height, width], uint8
-        n, v = views.shape[:2]
-        embeddings = self(views.flatten(0, 1).unsqueeze(1))
-        proj = self.projector(embeddings).reshape(n, v, -1).transpose(0, 1)
-        invariance = (proj.mean(0) - proj).square().mean()
+        # Both are [batch, views, height, width], uint8. Reordered to views first.
+        global_views = batch["unlabeled"]["global"].transpose(0, 1)
+        local_views = batch["unlabeled"]["local"].transpose(0, 1)
+        n, v = global_views.size(1), global_views.size(0) + local_views.size(0)
+        global_embeddings = self(global_views.flatten(0, 1).unsqueeze(1))
+        local_embeddings = self(local_views.flatten(0, 1).unsqueeze(1))
+        embeddings = torch.cat([global_embeddings, local_embeddings])
+        proj = self.projector(embeddings).reshape(v, n, -1)  # [views, batch, dim]
+        # All views predict the center of the global views.
+        centers = proj[: global_views.size(0)].mean(0)
+        invariance = (centers - proj).square().mean()
         sigreg = self.sigreg(proj)
         lejepa = self.lamb * sigreg + (1 - self.lamb) * invariance
 
@@ -81,7 +86,7 @@ class SSLMetaArch(LightningModule):
                 "train/invariance_loss": invariance,
                 "train/sigreg_loss": sigreg,
                 "train/probe_loss": probe,
-                "train/embedding_std": embeddings.detach().std(0).mean(),
+                "train/embedding_std": global_embeddings.detach().std(0).mean(),
             },
             batch_size=n,
             prog_bar=True,
@@ -112,7 +117,6 @@ class SSLMetaArch(LightningModule):
                     "weight_decay": 1e-7,
                 },
             ],
-            fused=True,
         )
         total = int(self.trainer.estimated_stepping_batches)
 

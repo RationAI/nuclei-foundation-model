@@ -10,6 +10,7 @@ trainer:
   max_steps: 20000
   max_epochs: -1
   precision: bf16-mixed
+  gradient_clip_val: 3.0
   log_every_n_steps: 10
   val_check_interval: 1000
   check_val_every_n_epoch: null
@@ -26,21 +27,20 @@ trainer:
       mode: min
 
 model:
-  backbone: vit_small_patch16_224 # timm has no patch 14 variant, see patch_size
-  patch_size: 14
+  backbone: vit_small_patch14_reg4_dinov2
   image_size: ${tile.size}
   embed_dim: 512
   projector_dim: 16
-  drop_path_rate: 0.1
+  drop_path_rate: 0.4
   lamb: 0.02
-  lr: 0.002
+  lr: 0.0005
   probe_lr: 0.001
   weight_decay: 0.05
   warmup_steps: 1000
 
-# 128 um field of view at 0.57 um/px: about 30 nuclei per tile, one nucleus per patch.
+# Radboud probe tiles at 20x (0.5 um/px), as Virchow2 evaluates tile tasks at 20x.
 tile:
-  field: 128.0
+  field: 112.0
   size: 224
 
 data:
@@ -52,35 +52,46 @@ data:
       dataset:
         _target_: nfm.data.datasets.NucleiDataset
         nuclei_path: ${project_path}/cells
-        views: 4
-        field: ${tile.field}
-        size: ${tile.size}
-        region_nuclei: 512
-        augmentation:
+        # Virchow2 recipe: 40x, 20x, 10x, 5x and extended-context translation.
+        global_views: 2
+        local_views: 8
+        context_size: 392
+        mpps: [0.25, 0.5, 1.0, 2.0]
+        mpp_weights: [0.2, 0.4, 0.2, 0.2]
+        max_density: 0.0125
+        global_augmentation:
           _target_: albumentations.Compose
           _convert_: all
           telemetry: false
           transforms:
-            - _target_: albumentations.Rotate
-              angle_range: [-180, 180]
-              border_mode: 0 # cv2.BORDER_CONSTANT
-              p: 1.0
-            - _target_: albumentations.CenterCrop
-              height: ${tile.size}
-              width: ${tile.size}
             - _target_: albumentations.RandomResizedCrop
-              size: [ "${tile.size}", "${tile.size}" ]
-              scale: [0.3, 1.0]
+              size: [224, 224]
+              scale: [0.294, 0.359] # (0.9, 1.1) * (224 / 392)^2
+              ratio: [0.95, 1.05]
               p: 1.0
             - _target_: albumentations.HorizontalFlip
               p: 0.5
-            - _target_: albumentations.CoarseDropout
-              num_holes_range: [1, 8]
-              hole_height_range: [0.05, 0.15]
-              hole_width_range: [0.05, 0.15]
+            - _target_: albumentations.VerticalFlip
               p: 0.5
             - _target_: albumentations.GaussianBlur
-              sigma_range: [0.2, 2.6]
+              sigma_range: [0.1, 2.0]
+              p: 0.5
+        local_augmentation:
+          _target_: albumentations.Compose
+          _convert_: all
+          telemetry: false
+          transforms:
+            - _target_: albumentations.RandomResizedCrop
+              size: [98, 98]
+              scale: [0.056, 0.069] # (0.9, 1.1) * (98 / 392)^2
+              ratio: [0.95, 1.05]
+              p: 1.0
+            - _target_: albumentations.HorizontalFlip
+              p: 0.5
+            - _target_: albumentations.VerticalFlip
+              p: 0.5
+            - _target_: albumentations.GaussianBlur
+              sigma_range: [0.1, 2.0]
               p: 0.5
     labeled:
       slides_path: mlflow-artifacts:/37/5b9c6f096026425fa2b04c4e74b7a6f3/artifacts/panda/slides_mapping_train.parquet

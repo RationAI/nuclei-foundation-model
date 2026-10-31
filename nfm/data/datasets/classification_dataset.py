@@ -21,7 +21,7 @@ class ClassificationNucleiDataset(Dataset[dict[str, Any]]):
         annotation_path: str,
         tiles_per_slide: int,
         grid: bool = False,
-        field: float = 128.0,
+        field: float = 112.0,
         size: int = 224,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
