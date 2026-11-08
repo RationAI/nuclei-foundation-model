@@ -33,6 +33,10 @@ model:
   projector_dim: 16
   drop_path_rate: 0.4
   lamb: 0.02
+  ibot_weight: 1.0
+  mask_ratio: [0.1, 0.5]
+  mask_probability: 0.5
+  sigreg_patches: 4096
   lr: 0.0005
   probe_lr: 0.001
   weight_decay: 0.05
@@ -63,6 +67,10 @@ data:
           _target_: albumentations.Compose
           _convert_: all
           telemetry: false
+          keypoint_params:
+            _target_: albumentations.KeypointParams
+            coord_format: xy
+            remove_invisible: false
           transforms:
             - _target_: albumentations.RandomResizedCrop
               size: [224, 224]

@@ -82,13 +82,19 @@ class NucleiDataset(Dataset[dict[str, NDArray[np.uint8]]]):
         polygons = polygons.astype(np.float32)
 
         context = render(polygons, seed[0] * mpp, field, self.context_size)
+        # Tracking three context corners gives each global view's affine map, which
+        # pairs up patches showing the same tissue across views.
+        size = self.context_size
+        corners = np.array([[0, 0], [size, 0], [0, size]], dtype=np.float32)
+        views, affines = [], []
+        for _ in range(self.global_views):
+            view = self.global_augmentation(image=context, keypoints=corners)
+            p0, p1, p2 = np.asarray(view["keypoints"], dtype=np.float32)
+            views.append(view["image"])
+            affines.append(np.stack([(p1 - p0) / size, (p2 - p0) / size, p0], axis=1))
         return {
-            "global": np.stack(
-                [
-                    self.global_augmentation(image=context)["image"]
-                    for _ in range(self.global_views)
-                ]
-            ),
+            "global": np.stack(views),
+            "global_affine": np.stack(affines),  # context px -> view px, [views, 2, 3]
             "local": np.stack(
                 [
                     self.local_augmentation(image=context)["image"]
