@@ -1,3 +1,5 @@
+import faulthandler
+
 import hydra
 import torch
 from lightning import seed_everything
@@ -7,6 +9,10 @@ from rationai.mlkit import Trainer, autolog
 
 from nfm.data import DataModule
 from nfm.ssl_meta_arch import SSLMetaArch
+
+
+# Print native stack traces on crashes, also in spawned DataLoader workers.
+faulthandler.enable()
 
 
 @hydra.main(config_path="../configs", config_name="nfm", version_base=None)

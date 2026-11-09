@@ -1,3 +1,4 @@
+import faulthandler
 from typing import Any
 
 import pandas as pd
@@ -11,6 +12,15 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 from nfm.data.samplers import SourceBalancedRandomSampler
+
+
+def enable_faulthandler(worker_id: int) -> None:
+    """Print native stack traces when a DataLoader worker crashes.
+
+    PyTorch replaces the crash handlers in each worker, so it is re-enabled here.
+    """
+    faulthandler.disable()
+    faulthandler.enable()
 
 
 def collate_tiles(batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
@@ -60,7 +70,8 @@ class DataModule(LightningDataModule):
                     persistent_workers=True,
                     pin_memory=True,
                     in_order=False,
-                    multiprocessing_context="spawn",  # for lance
+                    multiprocessing_context="spawn",  # lance is not fork-safe
+                    worker_init_fn=enable_faulthandler,
                 ),
                 "labeled": DataLoader(
                     self.train_labeled,
@@ -71,6 +82,7 @@ class DataModule(LightningDataModule):
                     persistent_workers=True,
                     pin_memory=True,
                     in_order=False,
+                    worker_init_fn=enable_faulthandler,
                     collate_fn=collate_tiles,
                 ),
             },
@@ -85,5 +97,6 @@ class DataModule(LightningDataModule):
             persistent_workers=True,
             pin_memory=True,
             in_order=False,
+            worker_init_fn=enable_faulthandler,
             collate_fn=collate_tiles,
         )
