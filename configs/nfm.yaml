@@ -105,10 +105,10 @@ data:
       slides_path: mlflow-artifacts:/37/5b9c6f096026425fa2b04c4e74b7a6f3/artifacts/panda/slides_mapping_train.parquet
       split_size: 0.2
       split_stratify_col: gleason_score
-      batch_size: 8 # slides, so 128 tiles per step
+      batch_size: 32 # slides, so 128 tiles per step
       tiles_per_slide: 16
       num_workers: 6
-      eval_batch_size: 8 # slides, so up to 512 tiles per step
+      eval_batch_size: 32 # slides, so up to 512 tiles per step
       eval_tiles_per_slide: 64
       eval_num_workers: 6
       dataset:
