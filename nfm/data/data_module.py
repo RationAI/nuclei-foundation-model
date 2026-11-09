@@ -1,8 +1,7 @@
 import faulthandler
-from typing import Any
+from functools import partial
 
 import pandas as pd
-import torch
 from hydra.utils import instantiate
 from lightning import LightningDataModule
 from lightning.pytorch.utilities import CombinedLoader
@@ -11,6 +10,7 @@ from omegaconf import DictConfig
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
+from nfm.data.packing import Batch, collate_tiles, collate_views
 from nfm.data.samplers import SourceBalancedRandomSampler
 
 
@@ -23,14 +23,17 @@ def enable_faulthandler(worker_id: int) -> None:
     faulthandler.enable()
 
 
-def collate_tiles(batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-    return {key: torch.cat([sample[key] for sample in batch]) for key in batch[0]}
-
-
 class DataModule(LightningDataModule):
-    def __init__(self, datasets: DictConfig) -> None:
+    def __init__(
+        self,
+        datasets: DictConfig,
+        mask_probability: float = 0.5,
+        mask_ratio: tuple[float, float] = (0.1, 0.5),
+    ) -> None:
         super().__init__()
         self.datasets = datasets
+        self.mask_probability = mask_probability
+        self.mask_ratio = tuple(mask_ratio)
 
     def prepare_data(self) -> None:
         for dataset in self.datasets.values():
@@ -72,6 +75,11 @@ class DataModule(LightningDataModule):
                     in_order=False,
                     multiprocessing_context="spawn",  # lance is not fork-safe
                     worker_init_fn=enable_faulthandler,
+                    collate_fn=partial(
+                        collate_views,
+                        mask_probability=self.mask_probability,
+                        mask_ratio=self.mask_ratio,
+                    ),
                 ),
                 "labeled": DataLoader(
                     self.train_labeled,
@@ -89,7 +97,7 @@ class DataModule(LightningDataModule):
             mode="max_size_cycle",
         )
 
-    def val_dataloader(self) -> DataLoader[dict[str, torch.Tensor]]:
+    def val_dataloader(self) -> DataLoader[Batch]:
         return DataLoader(
             self.validation,
             batch_size=self.datasets.labeled.eval_batch_size,

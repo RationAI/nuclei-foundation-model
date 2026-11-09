@@ -3,5 +3,5 @@
 mode: fit
 
 metadata:
-  run_name: LeJEPA ViT-S/8 rendered nuclei
-  description: LeJEPA on grayscale nuclei tiles with an online Radboud tile probe
+  run_name: Token LeJEPA nuclei transformer
+  description: LeJEPA and masked nucleus prediction on nuclei tokens with online Radboud tile and nucleus probes

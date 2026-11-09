@@ -1,18 +1,16 @@
-from typing import Any
-
 import numpy as np
 import pandas as pd
-import torch
 from torch.utils.data import Dataset
 
-from nfm.data.rendering import render
+from nfm.data.nuclei import View, crop_view
 
 
-class ClassificationNucleiDataset(Dataset[dict[str, Any]]):
-    """Rendered tiles of one Radboud slide, positive if >= 50 % nuclei are positive.
+class ClassificationNucleiDataset(Dataset[list[View]]):
+    """Tiles of one Radboud slide with nucleus labels.
 
-    Training draws tiles centered on random nuclei. Evaluation uses the occupied
-    cells of a fixed non-overlapping grid, subsampled reproducibly per slide.
+    A tile is positive if at least 50 % of its nuclei are. Training draws tiles
+    centered on random nuclei. Evaluation uses the occupied cells of a fixed
+    non-overlapping grid, subsampled reproducibly per slide.
     """
 
     def __init__(
@@ -22,14 +20,14 @@ class ClassificationNucleiDataset(Dataset[dict[str, Any]]):
         tiles_per_slide: int,
         grid: bool = False,
         field: float = 112.0,
-        size: int = 224,
+        efd_order: int = 16,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
         self.annotation_path = annotation_path
         self.tiles_per_slide = tiles_per_slide
         self.grid = grid
         self.field = field
-        self.size = size
+        self.efd_order = efd_order
 
     def __len__(self) -> int:
         return len(self.slides)
@@ -43,11 +41,9 @@ class ClassificationNucleiDataset(Dataset[dict[str, Any]]):
         cells = np.random.default_rng(idx).permutation(cells)[:count]
         return ((cells + 0.5) * self.field).astype(np.float32)
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, idx: int) -> list[View]:
         slide = self.slides.iloc[idx]
-        nuclei = pd.read_parquet(
-            slide.slide_nuclei_path, columns=["id", "centroid", "polygon"]
-        )
+        nuclei = pd.read_parquet(slide.slide_nuclei_path, columns=["id", "polygon"])
         labels = (
             pd.read_parquet(
                 f"{self.annotation_path}/{slide.slide_id}.parquet",
@@ -60,19 +56,15 @@ class ClassificationNucleiDataset(Dataset[dict[str, Any]]):
             else np.zeros(len(nuclei), dtype=np.float32)
         )
         mpp = np.array([slide.mpp_x, slide.mpp_y], dtype=np.float32)
-        centroids = np.stack(nuclei["centroid"]).astype(np.float32) * mpp
         polygons = (
             np.stack(nuclei["polygon"]).astype(np.float32).reshape(len(nuclei), -1, 2)
             * mpp
         )
-
-        centers = self.tile_centers(centroids, idx)
-        images = [render(polygons, c, self.field, self.size) for c in centers]
-        tile_labels = [
-            labels[np.abs(centroids - c).max(axis=1) <= self.field / 2].mean() >= 0.5
-            for c in centers
-        ]
-        return {
-            "images": torch.from_numpy(np.stack(images)).unsqueeze(1),
-            "labels": torch.tensor(tile_labels, dtype=torch.float32),
-        }
+        tiles = []
+        for center in self.tile_centers(polygons.mean(1), idx):
+            tile = crop_view(
+                polygons, center, self.field, order=self.efd_order, labels=labels
+            )
+            tile["label"] = np.float32(tile["labels"].mean() >= 0.5)
+            tiles.append(tile)
+        return tiles
