@@ -15,14 +15,17 @@ def document_mask(lengths: Tensor, block_size: int = 128) -> BlockMask:
     """Full attention within each packed sequence, none across them.
 
     Args:
-        lengths: Tokens per sequence. Their sum must be a multiple of block_size,
-            the last sequence can be padding.
+        lengths: Tokens per sequence.
         block_size: Block size of the flex attention kernel.
     """
     device = lengths.device
     documents = torch.repeat_interleave(
         torch.arange(len(lengths), device=device), lengths
     )
+    tokens = len(documents)
+    # The kernel works on whole blocks, the tail of the last one is out of range.
+    # A document id of its own keeps the mask in bounds there.
+    documents = F.pad(documents, (0, -tokens % block_size), value=len(lengths))
     blocks = documents.view(-1, block_size)
     first, last = blocks[:, 0], blocks[:, -1]
     # Sequences are contiguous, so blocks interact when their sequence ranges do.
@@ -48,6 +51,7 @@ def document_mask(lengths: Tensor, block_size: int = 128) -> BlockMask:
         full_kv_indices,
         BLOCK_SIZE=block_size,
         mask_mod=mask_mod,
+        seq_lengths=(tokens, tokens),
     )
 
 
@@ -164,17 +168,11 @@ class NucleiTransformer(nn.Module):
         tokens = x.new_empty(len(features), x.size(1))
         tokens[nuclei] = x
         tokens[cls] = self.cls_token.to(x.dtype)
-
-        # Padding to whole blocks forms one more sequence, attending to itself.
-        padding = -len(tokens) % self.block_size
-        tokens = F.pad(tokens, (0, 0, 0, padding)).float()  # fp32 residual stream
-        positions = F.pad(positions, (0, 0, 0, padding))
-        block_mask = document_mask(
-            torch.cat([lengths, lengths.new_tensor([padding])]), self.block_size
-        )
+        tokens = tokens.float()  # fp32 residual stream
+        block_mask = document_mask(lengths, self.block_size)
         for block in self.blocks:
             tokens = block(tokens, positions, block_mask)
-        return self.norm(tokens[: len(features)])
+        return self.norm(tokens)
 
 
 def cls_indices(lengths: Tensor) -> Tensor:
