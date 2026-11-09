@@ -43,7 +43,7 @@ class DataModule(LightningDataModule):
             labeled.dataset,
             slides=validation,
             tiles_per_slide=labeled.eval_tiles_per_slide,
-            grid=True,
+            fixed=True,
         )
         slides = pd.read_parquet(self.datasets.unlabeled.slides_path)
         self.train = instantiate(self.datasets.unlabeled.dataset, slides=slides)

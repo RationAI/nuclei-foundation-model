@@ -11,8 +11,9 @@ from nfm.data.rendering import render
 class ClassificationNucleiDataset(Dataset[dict[str, Any]]):
     """Rendered tiles of one Radboud slide, positive if >= 50 % nuclei are positive.
 
-    Training draws tiles centered on random nuclei. Evaluation uses the occupied
-    cells of a fixed non-overlapping grid, subsampled reproducibly per slide.
+    Tiles are occupied cells of a non-overlapping grid, as at evaluation, so the
+    online probe is trained on the distribution it is evaluated on. With fixed, the
+    same cells are chosen for a slide every time.
     """
 
     def __init__(
@@ -20,14 +21,14 @@ class ClassificationNucleiDataset(Dataset[dict[str, Any]]):
         slides: pd.DataFrame,
         annotation_path: str,
         tiles_per_slide: int,
-        grid: bool = False,
+        fixed: bool = False,
         field: float = 128.0,
         size: int = 224,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
         self.annotation_path = annotation_path
         self.tiles_per_slide = tiles_per_slide
-        self.grid = grid
+        self.fixed = fixed
         self.field = field
         self.size = size
 
@@ -35,12 +36,10 @@ class ClassificationNucleiDataset(Dataset[dict[str, Any]]):
         return len(self.slides)
 
     def tile_centers(self, centroids: np.ndarray, idx: int) -> np.ndarray:
-        if not self.grid:
-            picks = np.random.randint(len(centroids), size=self.tiles_per_slide)
-            return centroids[picks]
         cells = np.unique(np.floor(centroids / self.field), axis=0)
         count = min(len(cells), self.tiles_per_slide)
-        cells = np.random.default_rng(idx).permutation(cells)[:count]
+        rng = np.random.default_rng(idx if self.fixed else None)
+        cells = rng.permutation(cells)[:count]
         return ((cells + 0.5) * self.field).astype(np.float32)
 
     def __getitem__(self, idx: int) -> dict[str, Any]:

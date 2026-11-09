@@ -49,7 +49,10 @@ class SSLMetaArch(LightningModule):
             embed_dim, [2048, 2048, projector_dim], norm_layer=nn.BatchNorm1d
         )
         self.sigreg = SIGReg()
-        self.probe = nn.Sequential(nn.LayerNorm(embed_dim), nn.Linear(embed_dim, 1))
+        # The probe reads the CLS token rather than the head output: it is the
+        # richer representation and matches offline probes better.
+        dim = self.backbone.embed_dim
+        self.probe = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
         self.val_metrics = MetricCollection(
             {"AUROC": BinaryAUROC(), "AUPRC": BinaryAveragePrecision()},
             prefix="validation/",
@@ -57,6 +60,10 @@ class SSLMetaArch(LightningModule):
 
     def forward(self, images: Tensor) -> Tensor:
         return self.backbone((images.float() / 255 - 0.5) / 0.5)
+
+    def features(self, images: Tensor) -> Tensor:
+        """The CLS token used by the probe."""
+        return self.backbone.forward_features((images.float() / 255 - 0.5) / 0.5)[:, 0]
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         views = batch["unlabeled"]  # [batch, views, height, width], uint8
@@ -70,7 +77,7 @@ class SSLMetaArch(LightningModule):
         # Labels must not reach the encoder, and the probe sees no drop path.
         self.backbone.eval()
         with torch.no_grad():
-            features = self(batch["labeled"]["images"])
+            features = self.features(batch["labeled"]["images"])
         self.backbone.train()
         logits = self.probe(features).squeeze(1)
         probe = F.binary_cross_entropy_with_logits(logits, batch["labeled"]["labels"])
@@ -89,7 +96,7 @@ class SSLMetaArch(LightningModule):
         return lejepa + probe
 
     def validation_step(self, batch: dict[str, Tensor]) -> None:
-        logits = self.probe(self(batch["images"])).squeeze(1)
+        logits = self.probe(self.features(batch["images"])).squeeze(1)
         loss = F.binary_cross_entropy_with_logits(logits, batch["labels"])
         self.val_metrics.update(logits.sigmoid(), batch["labels"].long())
         self.log("validation/probe_loss", loss, batch_size=len(logits), sync_dist=True)

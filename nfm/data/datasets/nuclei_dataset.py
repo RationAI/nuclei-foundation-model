@@ -1,6 +1,5 @@
 from collections.abc import Callable
 
-import lance
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
@@ -41,6 +40,10 @@ class NucleiDataset(Dataset[NDArray[np.uint8]]):
         return len(self.slides)
 
     def __getitem__(self, idx: int) -> NDArray[np.uint8]:
+        # Imported here so the main process never loads lance, which is not
+        # fork-safe and would make forked DataLoader workers crash.
+        import lance
+
         slide = self.slides.iloc[idx]
         ds = lance.dataset(
             f"{self.nuclei_path}/organ={slide.organ}/dataset={slide.dataset}/slide_id={slide.id}/nuclei.lance"
