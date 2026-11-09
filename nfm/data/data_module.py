@@ -1,5 +1,6 @@
+import atexit
 import faulthandler
-from functools import partial
+import os
 
 import pandas as pd
 from hydra.utils import instantiate
@@ -14,26 +15,22 @@ from nfm.data.packing import Batch, collate_tiles, collate_views
 from nfm.data.samplers import SourceBalancedRandomSampler
 
 
-def enable_faulthandler(worker_id: int) -> None:
-    """Print native stack traces when a DataLoader worker crashes.
+def init_worker(worker_id: int) -> None:
+    """Prepares a DataLoader worker.
 
-    PyTorch replaces the crash handlers in each worker, so it is re-enabled here.
+    Prints native stack traces when the worker crashes. PyTorch replaces the
+    crash handlers in each worker, so they are re-enabled here. Workers exit
+    without native finalization, where lance sometimes aborts.
     """
     faulthandler.disable()
     faulthandler.enable()
+    atexit.register(os._exit, 0)
 
 
 class DataModule(LightningDataModule):
-    def __init__(
-        self,
-        datasets: DictConfig,
-        mask_probability: float = 0.5,
-        mask_ratio: tuple[float, float] = (0.1, 0.5),
-    ) -> None:
+    def __init__(self, datasets: DictConfig) -> None:
         super().__init__()
         self.datasets = datasets
-        self.mask_probability = mask_probability
-        self.mask_ratio = tuple(mask_ratio)
 
     def prepare_data(self) -> None:
         for dataset in self.datasets.values():
@@ -74,12 +71,8 @@ class DataModule(LightningDataModule):
                     pin_memory=True,
                     in_order=False,
                     multiprocessing_context="spawn",  # lance is not fork-safe
-                    worker_init_fn=enable_faulthandler,
-                    collate_fn=partial(
-                        collate_views,
-                        mask_probability=self.mask_probability,
-                        mask_ratio=self.mask_ratio,
-                    ),
+                    worker_init_fn=init_worker,
+                    collate_fn=collate_views,
                 ),
                 "labeled": DataLoader(
                     self.train_labeled,
@@ -90,7 +83,7 @@ class DataModule(LightningDataModule):
                     persistent_workers=True,
                     pin_memory=True,
                     in_order=False,
-                    worker_init_fn=enable_faulthandler,
+                    worker_init_fn=init_worker,
                     collate_fn=collate_tiles,
                 ),
             },
@@ -105,6 +98,6 @@ class DataModule(LightningDataModule):
             persistent_workers=True,
             pin_memory=True,
             in_order=False,
-            worker_init_fn=enable_faulthandler,
+            worker_init_fn=init_worker,
             collate_fn=collate_tiles,
         )

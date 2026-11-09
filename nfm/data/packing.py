@@ -38,75 +38,13 @@ def pack(views: list[View]) -> dict[str, Tensor]:
     }
 
 
-def blob_mask(positions: np.ndarray, ratio: float) -> np.ndarray:
-    """Masks the share `ratio` of nuclei closest to a random nucleus."""
-    count = round(ratio * len(positions))
-    if count == 0:
-        return np.zeros(len(positions), dtype=bool)
-    anchor = positions[np.random.randint(len(positions))]
-    distances = np.linalg.norm(positions - anchor, axis=1)
-    mask = np.zeros(len(positions), dtype=bool)
-    mask[np.argpartition(distances, count - 1)[:count]] = True
-    return mask
+def collate_views(batch: list[list[View]]) -> Batch:
+    """Packs the views of all samples view-major.
 
-
-def collate_views(
-    batch: list[dict[str, list[View]]],
-    mask_probability: float = 0.5,
-    mask_ratio: tuple[float, float] = (0.1, 0.5),
-) -> Batch:
-    """Packs global views, local views and masked copies of some global views.
-
-    Views are ordered view-major, so view `v` of sample `b` is sequence
-    `v * batch_size + b`. As in DINOv2, only a part of the global views is masked.
-    A masked nucleus is paired with the same nucleus in the next global view of
-    the sample, if it is there.
-
-    Returns:
-        The packed tokens with `masked` for the masked inputs, `pairs` with the
-        masked and target token indices, [2, pairs], and the view counts.
+    View `v` of sample `b` is sequence `v * batch_size + b`.
     """
-    n = len(batch)
-    global_views = [
-        s["global"][v] for v in range(len(batch[0]["global"])) for s in batch
-    ]
-    local_views = [s["local"][v] for v in range(len(batch[0]["local"])) for s in batch]
-    count = round(mask_probability * len(global_views))
-    chosen = np.random.permutation(len(global_views))[:count]
-    masks = [
-        blob_mask(global_views[i]["positions"], np.random.uniform(*mask_ratio))
-        for i in chosen
-    ]
-
-    views = global_views + local_views + [global_views[i] for i in chosen]
-    packed = pack(views)
-    starts = np.cumsum(packed["lengths"].numpy()) - packed["lengths"].numpy()
-    first_masked = len(global_views) + len(local_views)
-    masked = np.zeros(len(packed["features"]), dtype=bool)
-    predictions, targets = [np.zeros(0, int)], [np.zeros(0, int)]
-    for k, (i, mask) in enumerate(zip(chosen, masks, strict=True)):
-        tokens = starts[first_masked + k] + 1 + np.flatnonzero(mask)
-        masked[tokens] = True
-        partner = (i + n) % len(global_views)
-        _, ours, theirs = np.intersect1d(
-            global_views[i]["ids"][mask],
-            global_views[partner]["ids"],
-            assume_unique=True,
-            return_indices=True,
-        )
-        predictions.append(tokens[ours])
-        targets.append(starts[partner] + 1 + theirs)
-
-    return {
-        **packed,
-        "masked": torch.from_numpy(masked),
-        "pairs": torch.from_numpy(
-            np.stack([np.concatenate(predictions), np.concatenate(targets)])
-        ).long(),
-        "batch_size": n,
-        "global_views": len(batch[0]["global"]),
-        "local_views": len(batch[0]["local"]),
-    }
+    views = [sample[v] for v in range(len(batch[0])) for sample in batch]
+    return {**pack(views), "batch_size": len(batch), "views": len(batch[0])}
 
 
 def collate_tiles(batch: list[list[View]]) -> Batch:

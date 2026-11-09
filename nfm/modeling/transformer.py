@@ -131,7 +131,6 @@ class NucleiTransformer(nn.Module):
         self.input_norm = nn.BatchNorm1d(in_features, affine=False)
         self.embed = nn.Linear(in_features, dim)
         self.cls_token = nn.Parameter(torch.randn(dim) * 0.02)
-        self.mask_token = nn.Parameter(torch.randn(dim) * 0.02)
         self.blocks = nn.ModuleList(
             Block(dim, num_heads, hidden_dim, rope_theta) for _ in range(depth)
         )
@@ -146,7 +145,6 @@ class NucleiTransformer(nn.Module):
         features: Tensor,
         positions: Tensor,
         lengths: Tensor,
-        masked: Tensor | None = None,
     ) -> Tensor:
         """Encodes packed views.
 
@@ -155,7 +153,6 @@ class NucleiTransformer(nn.Module):
                 tokens are ignored.
             positions: Positions in micrometers, [tokens, 2].
             lengths: Tokens per view, the first token of each is the class token.
-            masked: Nucleus tokens whose input is replaced by the mask token.
 
         Returns:
             Output tokens, [tokens, dim].
@@ -167,8 +164,6 @@ class NucleiTransformer(nn.Module):
         tokens = x.new_empty(len(features), x.size(1))
         tokens[nuclei] = x
         tokens[cls] = self.cls_token.to(x.dtype)
-        if masked is not None:
-            tokens[masked] = self.mask_token.to(x.dtype)
 
         # Padding to whole blocks forms one more sequence, attending to itself.
         padding = -len(tokens) % self.block_size

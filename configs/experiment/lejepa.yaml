@@ -4,4 +4,4 @@ mode: fit
 
 metadata:
   run_name: Token LeJEPA nuclei transformer
-  description: LeJEPA and masked nucleus prediction on nuclei tokens with online Radboud tile and nucleus probes
+  description: LeJEPA on nuclei tokens with online Radboud tile and nucleus probes

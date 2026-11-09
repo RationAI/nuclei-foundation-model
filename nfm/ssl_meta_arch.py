@@ -1,4 +1,4 @@
-"""LeJEPA on nuclei tokens with a masked nucleus objective and detached probes."""
+"""LeJEPA on nuclei tokens with detached tile and nucleus probes."""
 
 import math
 from typing import Any
@@ -27,8 +27,6 @@ class SSLMetaArch(LightningModule):
         backbone: dict[str, Any],
         projector_dim: int = 16,
         lamb: float = 0.02,
-        ibot_weight: float = 1.0,
-        sigreg_tokens: int = 4096,
         lr: float = 5e-4,
         probe_lr: float = 1e-3,
         weight_decay: float = 0.05,
@@ -37,8 +35,6 @@ class SSLMetaArch(LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.lamb = lamb
-        self.ibot_weight = ibot_weight
-        self.sigreg_tokens = sigreg_tokens
         self.lr = lr
         self.probe_lr = probe_lr
         self.weight_decay = weight_decay
@@ -46,9 +42,6 @@ class SSLMetaArch(LightningModule):
         self.backbone = NucleiTransformer(**backbone)
         dim = self.backbone.norm.normalized_shape[0]
         self.projector = MLP(
-            dim, [2048, 2048, projector_dim], norm_layer=nn.BatchNorm1d
-        )
-        self.token_projector = MLP(
             dim, [2048, 2048, projector_dim], norm_layer=nn.BatchNorm1d
         )
         self.sigreg = SIGReg()
@@ -59,9 +52,7 @@ class SSLMetaArch(LightningModule):
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         """Returns the class tokens, [views, dim], and nucleus tokens, [nuclei, dim]."""
-        tokens = self.backbone(
-            batch["features"], batch["positions"], batch["lengths"], batch.get("masked")
-        )
+        tokens = self.backbone(batch["features"], batch["positions"], batch["lengths"])
         cls = cls_indices(batch["lengths"])
         nuclei = torch.ones(len(tokens), dtype=torch.bool, device=tokens.device)
         nuclei[cls] = False
@@ -73,30 +64,12 @@ class SSLMetaArch(LightningModule):
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         views = batch["unlabeled"]
-        n, g = views["batch_size"], views["global_views"]
-        v = g + views["local_views"]
-        tokens = self.backbone(
-            views["features"], views["positions"], views["lengths"], views["masked"]
-        )
-        cls = tokens[cls_indices(views["lengths"])]
-        proj = self.projector(cls[: v * n]).reshape(v, n, -1)  # [views, batch, dim]
-        # All views predict the center of the global views.
-        centers = proj[:g].mean(0)
-        invariance = (centers - proj).square().mean()
+        n, v = views["batch_size"], views["views"]
+        embeddings, _ = self(views)
+        proj = self.projector(embeddings).reshape(v, n, -1)  # [views, batch, dim]
+        invariance = (proj.mean(0) - proj).square().mean()
         sigreg = self.sigreg(proj)
         lejepa = self.lamb * sigreg + (1 - self.lamb) * invariance
-
-        # iBOT-style: masked nuclei predict the same nucleus in the other, unmasked
-        # global view. The views are rotated and flipped differently, so the
-        # position cannot be the answer. SIGReg on the token projections prevents
-        # collapse without a teacher.
-        predictions, targets = views["pairs"]
-        pairs = torch.cat([tokens[targets], tokens[predictions]])
-        target, prediction = self.token_projector(pairs).chunk(2)
-        token_prediction = (target - prediction).square().mean()
-        subset = torch.randperm(len(pairs), device=self.device)[: self.sigreg_tokens]
-        token_sigreg = self.sigreg(torch.cat([target, prediction])[subset][None])
-        ibot = self.lamb * token_sigreg + (1 - self.lamb) * token_prediction
 
         # Labels must not reach the encoder, nor its batch norm statistics.
         labeled = batch["labeled"]
@@ -116,19 +89,15 @@ class SSLMetaArch(LightningModule):
                 "train/lejepa_loss": lejepa,
                 "train/invariance_loss": invariance,
                 "train/sigreg_loss": sigreg,
-                "train/ibot_loss": ibot,
-                "train/token_prediction_loss": token_prediction,
-                "train/token_sigreg_loss": token_sigreg,
-                "train/predicted_nuclei": float(predictions.numel()) / n,
-                "train/tokens": float(len(tokens)),
+                "train/tokens": float(len(views["features"])),
                 "train/tile_probe_loss": tile_probe,
                 "train/nucleus_probe_loss": nucleus_probe,
-                "train/embedding_std": cls[: g * n].detach().float().std(0).mean(),
+                "train/embedding_std": embeddings.detach().float().std(0).mean(),
             },
             batch_size=n,
             prog_bar=True,
         )
-        return lejepa + self.ibot_weight * ibot + tile_probe + nucleus_probe
+        return lejepa + tile_probe + nucleus_probe
 
     def validation_step(self, batch: dict[str, Tensor]) -> None:
         tile_logits, nucleus_logits = self.probe_logits(batch)
@@ -151,7 +120,6 @@ class SSLMetaArch(LightningModule):
         for name, parameter in [
             *self.backbone.named_parameters(),
             *self.projector.named_parameters(),
-            *self.token_projector.named_parameters(),
         ]:
             # Decay would shrink the RoVE frequencies, norms and special tokens.
             skip = parameter.ndim <= 1 or name.endswith("rope.freqs")
