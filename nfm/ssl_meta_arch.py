@@ -10,7 +10,12 @@ from lejepa.univariate import EppsPulley
 from lightning import LightningModule
 from torch import Tensor, nn
 from torchmetrics import MetricCollection
-from torchmetrics.classification import BinaryAUROC, BinaryAveragePrecision
+from torchmetrics.classification import (
+    BinaryAUROC,
+    BinaryAveragePrecision,
+    BinaryPrecision,
+    BinaryRecall,
+)
 from torchvision.ops import MLP
 
 from nfm.modeling.transformer import NucleiTransformer, cls_indices
@@ -18,7 +23,13 @@ from nfm.modeling.transformer import NucleiTransformer, cls_indices
 
 def _metrics(prefix: str) -> MetricCollection:
     return MetricCollection(
-        {"AUROC": BinaryAUROC(), "AUPRC": BinaryAveragePrecision()}, prefix=prefix
+        {
+            "AUROC": BinaryAUROC(),
+            "AUPRC": BinaryAveragePrecision(),
+            "precision": BinaryPrecision(),
+            "recall": BinaryRecall(),
+        },
+        prefix=prefix,
     )
 
 

@@ -4,7 +4,7 @@
 
 - **Views**: random square crops of one 128 um field, covering 30-100 % of its area, augmented on the polygons (rotation, flips, dropout holes, shape noise).
 - **Objective**: LeJEPA on the class tokens, every view predicts the mean of all views.
-- **Probes**: online, detached probes on PANDA Radboud, one on the class token (a tile is positive if at least 50 % of its nuclei are) and one on each nucleus token.
+- **Probes**: online, detached probes on PANDA Radboud, one on the class token (a tile is positive if at least 50 % of its nuclei are) and one on each nucleus token. Validation divides each validation slide entirely into 128 um tiles and reports AUROC, AUPRC, precision and recall for both.
 
 ```bash
 uv sync

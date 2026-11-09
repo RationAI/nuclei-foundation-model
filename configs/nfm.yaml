@@ -78,8 +78,6 @@ data:
       batch_size: 32 # slides, so 512 tiles per step
       tiles_per_slide: 16
       num_workers: 6
-      eval_batch_size: 8 # slides, so up to 512 tiles per step
-      eval_tiles_per_slide: 64
       eval_num_workers: 6
       dataset:
         _target_: nfm.data.datasets.ClassificationNucleiDataset

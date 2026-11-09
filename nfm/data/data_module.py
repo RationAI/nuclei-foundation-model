@@ -49,12 +49,8 @@ class DataModule(LightningDataModule):
         self.train_labeled = instantiate(
             labeled.dataset, slides=train, tiles_per_slide=labeled.tiles_per_slide
         )
-        self.validation = instantiate(
-            labeled.dataset,
-            slides=validation,
-            tiles_per_slide=labeled.eval_tiles_per_slide,
-            grid=True,
-        )
+        # Whole slides, divided into tiles.
+        self.validation = instantiate(labeled.dataset, slides=validation)
         slides = pd.read_parquet(self.datasets.unlabeled.slides_path)
         self.train = instantiate(self.datasets.unlabeled.dataset, slides=slides)
 
@@ -93,7 +89,7 @@ class DataModule(LightningDataModule):
     def val_dataloader(self) -> DataLoader[Batch]:
         return DataLoader(
             self.validation,
-            batch_size=self.datasets.labeled.eval_batch_size,
+            batch_size=1,  # a whole slide
             num_workers=self.datasets.labeled.eval_num_workers,
             persistent_workers=True,
             pin_memory=True,

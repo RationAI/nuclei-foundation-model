@@ -8,38 +8,42 @@ from nfm.data.nuclei import View, crop_view
 class ClassificationNucleiDataset(Dataset[list[View]]):
     """Tiles of one Radboud slide with nucleus labels.
 
-    A tile is positive if at least 50 % of its nuclei are. Training draws tiles
-    centered on random nuclei. Evaluation uses the occupied cells of a fixed
-    non-overlapping grid, subsampled reproducibly per slide.
+    A tile is positive if at least 50 % of its nuclei are. With `tiles_per_slide`,
+    tiles are centered on random nuclei, for training. Without it, the whole
+    slide is divided into the cells of a fixed grid, so every nucleus is in
+    exactly one tile, for evaluation.
     """
 
     def __init__(
         self,
         slides: pd.DataFrame,
         annotation_path: str,
-        tiles_per_slide: int,
-        grid: bool = False,
+        tiles_per_slide: int | None = None,
         field: float = 112.0,
         efd_order: int = 16,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
         self.annotation_path = annotation_path
         self.tiles_per_slide = tiles_per_slide
-        self.grid = grid
         self.field = field
         self.efd_order = efd_order
 
     def __len__(self) -> int:
         return len(self.slides)
 
-    def tile_centers(self, centroids: np.ndarray, idx: int) -> np.ndarray:
-        if not self.grid:
+    def tile_nuclei(
+        self, centroids: np.ndarray
+    ) -> list[tuple[np.ndarray, np.ndarray | slice]]:
+        """Center of each tile and the nuclei it is cropped from."""
+        if self.tiles_per_slide is not None:
             picks = np.random.randint(len(centroids), size=self.tiles_per_slide)
-            return centroids[picks]
-        cells = np.unique(np.floor(centroids / self.field), axis=0)
-        count = min(len(cells), self.tiles_per_slide)
-        cells = np.random.default_rng(idx).permutation(cells)[:count]
-        return ((cells + 0.5) * self.field).astype(np.float32)
+            return [(centroids[i], slice(None)) for i in picks]
+        cells = np.floor(centroids / self.field).astype(np.int64)
+        cells, members = np.unique(cells, axis=0, return_inverse=True)
+        order = np.argsort(members, kind="stable")
+        groups = np.split(order, np.cumsum(np.bincount(members))[:-1])
+        centers = ((cells + 0.5) * self.field).astype(np.float32)
+        return list(zip(centers, groups, strict=True))
 
     def __getitem__(self, idx: int) -> list[View]:
         slide = self.slides.iloc[idx]
@@ -61,9 +65,13 @@ class ClassificationNucleiDataset(Dataset[list[View]]):
             * mpp
         )
         tiles = []
-        for center in self.tile_centers(polygons.mean(1), idx):
+        for center, members in self.tile_nuclei(polygons.mean(1)):
             tile = crop_view(
-                polygons, center, self.field, order=self.efd_order, labels=labels
+                polygons[members],
+                center,
+                self.field,
+                order=self.efd_order,
+                labels=labels[members],
             )
             tile["label"] = np.float32(tile["labels"].mean() >= 0.5)
             tiles.append(tile)
