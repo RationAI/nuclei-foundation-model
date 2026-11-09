@@ -5,13 +5,14 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
+from lejepa.multivariate import SlicingUnivariateTest
+from lejepa.univariate import EppsPulley
 from lightning import LightningModule
 from torch import Tensor, nn
 from torchmetrics import MetricCollection
 from torchmetrics.classification import BinaryAUROC, BinaryAveragePrecision
 from torchvision.ops import MLP
 
-from nfm.modeling.sigreg import SIGReg
 from nfm.modeling.transformer import NucleiTransformer, cls_indices
 
 
@@ -44,7 +45,7 @@ class SSLMetaArch(LightningModule):
         self.projector = MLP(
             dim, [2048, 2048, projector_dim], norm_layer=nn.BatchNorm1d
         )
-        self.sigreg = SIGReg()
+        self.sigreg = SlicingUnivariateTest(EppsPulley(n_points=17), num_slices=256)
         self.tile_probe = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
         self.nucleus_probe = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
         self.tile_metrics = _metrics("validation/tile/")
@@ -68,7 +69,8 @@ class SSLMetaArch(LightningModule):
         embeddings, _ = self(views)
         proj = self.projector(embeddings).reshape(v, n, -1)  # [views, batch, dim]
         invariance = (proj.mean(0) - proj).square().mean()
-        sigreg = self.sigreg(proj)
+        with torch.autocast(self.device.type, enabled=False):
+            sigreg = self.sigreg(proj.float())
         lejepa = self.lamb * sigreg + (1 - self.lamb) * invariance
 
         # Labels must not reach the encoder, nor its batch norm statistics.
