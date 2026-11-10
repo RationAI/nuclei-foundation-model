@@ -105,12 +105,28 @@ class SSLMetaArch(LightningModule):
                 "train/tokens": float(len(views["features"])),
                 "train/tile_probe_loss": tile_probe,
                 "train/nucleus_probe_loss": nucleus_probe,
-                "train/embedding_std": embeddings.detach().float().std(0).mean(),
+                **self.embedding_statistics(embeddings.detach().float()),
             },
             batch_size=n,
             prog_bar=True,
         )
         return lejepa + tile_probe + nucleus_probe
+
+    @staticmethod
+    def embedding_statistics(embeddings: Tensor) -> dict[str, Tensor]:
+        """Spread of the class tokens, comparable across encoders.
+
+        The std is of the L2-normalized embeddings, scaled so that isotropic ones
+        give 1. The effective rank is the exponential of the entropy of the
+        normalized singular values of the centered embeddings.
+        """
+        normalized = F.normalize(embeddings, dim=1) * embeddings.size(1) ** 0.5
+        singular = torch.linalg.svdvals(embeddings - embeddings.mean(0))
+        p = singular / singular.sum()
+        return {
+            "train/embedding_std": normalized.std(0).mean(),
+            "train/embedding_rank": torch.exp(-(p * p.clamp_min(1e-12).log()).sum()),
+        }
 
     def validation_step(self, batch: dict[str, Tensor]) -> None:
         tile_logits, nucleus_logits = self.probe_logits(batch)

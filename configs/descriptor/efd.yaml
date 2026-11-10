@@ -1,0 +1,4 @@
+# Elliptic Fourier descriptors, 4 * order features.
+_target_: nfm.data.nuclei.elliptic_fourier_descriptors
+_partial_: true
+order: 16

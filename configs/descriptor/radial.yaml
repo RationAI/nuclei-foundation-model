@@ -1,0 +1,4 @@
+# Contour distances from the centroid at 64 fixed angles.
+_target_: nfm.data.nuclei.radial_distances
+_partial_: true
+rays: 64

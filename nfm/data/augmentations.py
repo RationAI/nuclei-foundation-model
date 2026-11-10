@@ -77,15 +77,23 @@ class Holes:
 
 
 class ShapeNoise:
-    """Smooth radial deformation of each contour, like a blur of the outlines.
+    """Smooth radial deformation and rescaling of each contour independently.
 
     The radial offsets are a random Fourier series over the vertices, with the
     harmonics up to `harmonics` and the offsets relative to the nucleus radius.
+    Each nucleus is also rescaled by a factor drawn from `scale`.
     """
 
-    def __init__(self, std: float = 0.05, harmonics: int = 4, p: float = 0.5) -> None:
+    def __init__(
+        self,
+        std: float = 0.05,
+        harmonics: int = 4,
+        scale: tuple[float, float] = (1.0, 1.0),
+        p: float = 1.0,
+    ) -> None:
         self.std = std
         self.harmonics = harmonics
+        self.scale = scale
         self.p = p
 
     def __call__(self, polygons: NDArray[np.float32], **other: NDArray[Any]) -> Nuclei:
@@ -98,5 +106,17 @@ class ShapeNoise:
         amplitudes = np.random.normal(0, self.std, (n, self.harmonics, 1))
         phases = np.random.uniform(0, 2 * np.pi, (n, self.harmonics, 1))
         noise = (amplitudes * np.cos(k * angles + phases)).sum(1)  # [n, vertices]
-        polygons = centroids + (polygons - centroids) * (1 + noise[..., None])
+        factor = (1 + noise) * np.random.uniform(*self.scale, (n, 1))
+        polygons = centroids + (polygons - centroids) * factor[..., None]
         return {"polygons": polygons.astype(np.float32), **other}
+
+
+class Drop:
+    """Removes each nucleus with probability `p`, along with its other arrays."""
+
+    def __init__(self, p: float = 0.1) -> None:
+        self.p = p
+
+    def __call__(self, **nuclei: NDArray[Any]) -> Nuclei:
+        keep = np.random.rand(len(nuclei["polygons"])) >= self.p
+        return {key: value[keep] for key, value in nuclei.items()}

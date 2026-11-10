@@ -4,7 +4,14 @@ from numpy.typing import NDArray
 from pyarrow import FixedSizeListArray
 from torch.utils.data import Dataset
 
-from nfm.data.nuclei import Augmentation, View, crop_view, radial_polygons
+from nfm.data.nuclei import (
+    Augmentation,
+    Descriptor,
+    View,
+    crop_view,
+    radial_distances,
+    radial_polygons,
+)
 
 
 def _to_numpy(column: FixedSizeListArray) -> NDArray[np.float32]:
@@ -29,7 +36,7 @@ class NucleiDataset(Dataset[list[View]]):
         field: float = 128.0,
         scale: tuple[float, float] = (0.3, 1.0),
         region_nuclei: int = 512,
-        efd_order: int = 16,
+        descriptor: Descriptor = radial_distances,
     ) -> None:
         """Initializes the dataset.
 
@@ -42,7 +49,7 @@ class NucleiDataset(Dataset[list[View]]):
             scale: Range of the share of the field area covered by a view.
             region_nuclei: Nuclei loaded around the field center. Must cover a
                 circle of radius field / sqrt(2), so rotated views stay inside.
-            efd_order: Number of harmonics of the shape descriptors.
+            descriptor: Shape features of a contour in the view frame.
         """
         self.slides = slides.reset_index(drop=True)
         self.nuclei_path = nuclei_path
@@ -51,7 +58,7 @@ class NucleiDataset(Dataset[list[View]]):
         self.field = field
         self.scale = scale
         self.region_nuclei = region_nuclei
-        self.efd_order = efd_order
+        self.descriptor = descriptor
 
     def __len__(self) -> int:
         return len(self.slides)
@@ -100,7 +107,7 @@ class NucleiDataset(Dataset[list[View]]):
                     center,
                     size,
                     augmentation=self.augmentation,
-                    order=self.efd_order,
+                    descriptor=self.descriptor,
                 )
             )
         return views

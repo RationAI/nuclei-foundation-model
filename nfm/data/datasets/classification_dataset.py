@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 
-from nfm.data.nuclei import View, crop_view
+from nfm.data.nuclei import Descriptor, View, crop_view, radial_distances
 
 
 class ClassificationNucleiDataset(Dataset[list[View]]):
@@ -20,13 +20,13 @@ class ClassificationNucleiDataset(Dataset[list[View]]):
         annotation_path: str,
         tiles_per_slide: int | None = None,
         field: float = 112.0,
-        efd_order: int = 16,
+        descriptor: Descriptor = radial_distances,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
         self.annotation_path = annotation_path
         self.tiles_per_slide = tiles_per_slide
         self.field = field
-        self.efd_order = efd_order
+        self.descriptor = descriptor
 
     def __len__(self) -> int:
         return len(self.slides)
@@ -70,7 +70,7 @@ class ClassificationNucleiDataset(Dataset[list[View]]):
                 polygons[members],
                 center,
                 self.field,
-                order=self.efd_order,
+                descriptor=self.descriptor,
                 labels=labels[members],
             )
             tile["label"] = np.float32(tile["labels"].mean() >= 0.5)

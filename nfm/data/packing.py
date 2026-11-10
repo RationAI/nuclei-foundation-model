@@ -20,16 +20,16 @@ def pack(views: list[View]) -> dict[str, Tensor]:
     """Concatenates the views into one sequence.
 
     Returns:
-        features: Shape descriptors, zeros for the class tokens, [tokens, features].
+        features: Shape features, zeros for the class tokens, [tokens, features].
         positions: Positions relative to the view center, [tokens, 2].
         lengths: Tokens per view, including the class token, [views].
     """
-    width = views[0]["efds"].shape[1]
+    width = views[0]["features"].shape[1]
     cls = np.zeros((1, width), dtype=np.float32)
     origin = np.zeros((1, 2), dtype=np.float32)
     return {
         "features": torch.from_numpy(
-            np.concatenate([x for v in views for x in (cls, v["efds"])])
+            np.concatenate([x for v in views for x in (cls, v["features"])])
         ),
         "positions": torch.from_numpy(
             np.concatenate([x for v in views for x in (origin, v["positions"])])

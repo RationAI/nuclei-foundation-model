@@ -1,0 +1,15 @@
+# @package data.datasets.unlabeled.dataset.augmentation
+# The first version: no zoom, no per-nucleus rescaling or drop.
+_target_: nfm.data.augmentations.Compose
+transforms:
+  - _target_: nfm.data.augmentations.Affine
+    rotation: true
+    flip: true
+  - _target_: nfm.data.augmentations.Holes
+    count: [1, 8]
+    size: [6.4, 19.2] # (0.05, 0.15) * field
+    p: 0.5
+  - _target_: nfm.data.augmentations.ShapeNoise
+    std: 0.05
+    harmonics: 4
+    p: 0.5

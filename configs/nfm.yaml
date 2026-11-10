@@ -1,5 +1,7 @@
 defaults:
   - base
+  - descriptor: radial
+  - augmentation: strong
   - _self_
 
 seed: 0
@@ -27,7 +29,8 @@ trainer:
 
 model:
   backbone:
-    in_features: 64 # 4 * efd_order
+    in_features: 64 # rays, or 4 * order for efd
+    mlp_embed: true
     dim: 384
     depth: 12
     num_heads: 6
@@ -40,7 +43,6 @@ model:
   weight_decay: 0.05
   warmup_steps: 1000
 
-efd_order: 16
 field: 128.0 # um, about 30 nuclei per tile
 
 data:
@@ -56,21 +58,7 @@ data:
         field: ${field}
         scale: [0.3, 1.0]
         region_nuclei: 512
-        efd_order: ${efd_order}
-        augmentation:
-          _target_: nfm.data.augmentations.Compose
-          transforms:
-            - _target_: nfm.data.augmentations.Affine
-              rotation: true
-              flip: true
-            - _target_: nfm.data.augmentations.Holes
-              count: [1, 8]
-              size: [6.4, 19.2] # (0.05, 0.15) * field
-              p: 0.5
-            - _target_: nfm.data.augmentations.ShapeNoise
-              std: 0.05
-              harmonics: 4
-              p: 0.5
+        descriptor: ${descriptor}
     labeled:
       slides_path: mlflow-artifacts:/37/5b9c6f096026425fa2b04c4e74b7a6f3/artifacts/panda/slides_mapping_train.parquet
       split_size: 0.2
@@ -83,4 +71,4 @@ data:
         _target_: nfm.data.datasets.ClassificationNucleiDataset
         annotation_path: /mnt/projects/nuclei_based_wsi_analysis/nuclei_supervision/PANDA/Radboud/annotation
         field: ${field}
-        efd_order: ${efd_order}
+        descriptor: ${descriptor}

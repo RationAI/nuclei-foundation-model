@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 
 type View = dict[str, NDArray[Any]]
 type Augmentation = Callable[..., dict[str, NDArray[Any]]]
+type Descriptor = Callable[[NDArray[np.float32]], NDArray[np.float32]]
 
 
 def radial_polygons(
@@ -69,13 +70,48 @@ def elliptic_fourier_descriptors(
     return coeffs.reshape(len(coeffs), 4 * order).astype(np.float32)
 
 
+def radial_distances(
+    polygons: NDArray[np.floating], rays: int = 64
+) -> NDArray[np.float32]:
+    """Contour distances from the centroid at fixed angles in the view frame.
+
+    Unlike the Fourier descriptors, they change continuously with the shape: a
+    rotation of the nucleus shifts them circularly and a flip reverses them.
+
+    Args:
+        polygons: Star-convex contours with shape [nuclei, vertices, 2].
+        rays: Number of equally spaced angles, starting along the x axis.
+
+    Returns:
+        Distances with shape [nuclei, rays].
+    """
+    offsets = polygons - polygons.mean(1, keepdims=True)
+    angles = np.arctan2(offsets[..., 1], offsets[..., 0])
+    radii = np.linalg.norm(offsets, axis=-1)
+    order = np.argsort(angles, axis=1)
+    angles = np.take_along_axis(angles, order, 1)
+    radii = np.take_along_axis(radii, order, 1)
+    # Wrap around, so every ray lies between two vertices.
+    angles = np.concatenate(
+        [angles[:, -1:] - 2 * np.pi, angles, angles[:, :1] + 2 * np.pi], 1
+    )
+    radii = np.concatenate([radii[:, -1:], radii, radii[:, :1]], 1)
+    grid = np.linspace(-np.pi, np.pi, rays, endpoint=False)
+    right = (angles[:, None, :] <= grid[None, :, None]).sum(-1)  # [nuclei, rays]
+    left = right - 1
+    a0, a1 = np.take_along_axis(angles, left, 1), np.take_along_axis(angles, right, 1)
+    r0, r1 = np.take_along_axis(radii, left, 1), np.take_along_axis(radii, right, 1)
+    weight = (grid - a0) / np.maximum(a1 - a0, 1e-8)
+    return (r0 + weight * (r1 - r0)).astype(np.float32)
+
+
 def crop_view(
     polygons: NDArray[np.float32],
     center: NDArray[np.float32],
     size: float,
     max_nuclei: int | None = None,
     augmentation: Augmentation | None = None,
-    order: int = 16,
+    descriptor: Descriptor = radial_distances,
     **extras: NDArray[Any],
 ) -> View:
     """A square view of the nuclei whose centroids lie inside it.
@@ -90,11 +126,11 @@ def crop_view(
         size: View side length in micrometers.
         max_nuclei: Keeps only this many nuclei, the closest to the center.
         augmentation: Called with polygons and the extras, returns them changed.
-        order: Number of harmonics of the shape descriptors.
+        descriptor: Shape features of the contours in the view frame.
         extras: Per-nucleus arrays, such as ids or labels, selected alongside.
 
     Returns:
-        Shape descriptors, positions relative to the view center and the extras.
+        Shape features, positions relative to the view center and the extras.
     """
     # Only nuclei within `size` of the center can end up in the view, as long as
     # the augmentation shrinks the field by less than sqrt(2). Shapes are not
@@ -113,7 +149,7 @@ def crop_view(
         keep = keep[np.argpartition(distances, max_nuclei - 1)[:max_nuclei]]
     polygons = view.pop("polygons")[keep]
     return {
-        "efds": elliptic_fourier_descriptors(polygons, order),
+        "features": descriptor(polygons),
         "positions": positions[keep].astype(np.float32),
         **{key: value[keep] for key, value in view.items()},
     }

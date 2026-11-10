@@ -115,7 +115,7 @@ class Block(nn.Module):
 class NucleiTransformer(nn.Module):
     """Encodes views of nuclei, each a class token followed by nucleus tokens.
 
-    Nucleus tokens embed the shape descriptors, positions enter only through RoVE.
+    Nucleus tokens embed the shape features, positions enter only through RoVE.
     """
 
     def __init__(
@@ -127,13 +127,18 @@ class NucleiTransformer(nn.Module):
         hidden_dim: int = 1024,
         rope_theta: float = 100.0,
         block_size: int = 128,
+        mlp_embed: bool = True,
         compile: bool = True,
     ) -> None:
         super().__init__()
         self.block_size = block_size
-        # Descriptors scale with the nucleus size, which has to stay visible.
+        # Shape features scale with the nucleus size, which has to stay visible.
         self.input_norm = nn.BatchNorm1d(in_features, affine=False)
-        self.embed = nn.Linear(in_features, dim)
+        self.embed = (
+            nn.Sequential(nn.Linear(in_features, dim), nn.GELU(), nn.Linear(dim, dim))
+            if mlp_embed
+            else nn.Linear(in_features, dim)
+        )
         self.cls_token = nn.Parameter(torch.randn(dim) * 0.02)
         self.blocks = nn.ModuleList(
             Block(dim, num_heads, hidden_dim, rope_theta) for _ in range(depth)
@@ -153,7 +158,7 @@ class NucleiTransformer(nn.Module):
         """Encodes packed views.
 
         Args:
-            features: Shape descriptors, [tokens, in_features]. Rows of the class
+            features: Shape features, [tokens, in_features]. Rows of the class
                 tokens are ignored.
             positions: Positions in micrometers, [tokens, 2].
             lengths: Tokens per view, the first token of each is the class token.
