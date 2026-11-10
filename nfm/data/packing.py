@@ -38,15 +38,6 @@ def pack(views: list[View]) -> dict[str, Tensor]:
     }
 
 
-def collate_views(batch: list[list[View]]) -> Batch:
-    """Packs the views of all samples view-major.
-
-    View `v` of sample `b` is sequence `v * batch_size + b`.
-    """
-    views = [sample[v] for v in range(len(batch[0])) for sample in batch]
-    return {**pack(views), "batch_size": len(batch), "views": len(batch[0])}
-
-
 def collate_tiles(batch: list[list[View]]) -> Batch:
     """Packs the tiles of all slides with tile and nucleus labels."""
     tiles = [tile for slide in batch for tile in slide]

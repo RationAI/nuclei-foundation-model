@@ -1,0 +1,7 @@
+# @package _global_
+# uv run python -m nfm +experiment=supervised
+mode: fit
+
+metadata:
+  run_name: Supervised nuclei transformer
+  description: Nuclei transformer trained on Radboud tile labels, a baseline for the self-supervised model

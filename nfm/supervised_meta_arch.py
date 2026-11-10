@@ -1,12 +1,15 @@
-"""LeJEPA on nuclei tokens with detached tile and nucleus probes."""
+"""Supervised baseline: the nuclei transformer trained on Radboud tile labels.
+
+The tile head on the class token is trained end to end. The nucleus probe stays
+detached, as in the self-supervised model, so nucleus labels never reach the
+encoder. Validation logs under the same names as the self-supervised model.
+"""
 
 import math
 from typing import Any
 
 import torch
 import torch.nn.functional as F
-from lejepa.multivariate import SlicingUnivariateTest
-from lejepa.univariate import EppsPulley
 from lightning import LightningModule
 from torch import Tensor, nn
 from torchmetrics import MetricCollection
@@ -16,7 +19,6 @@ from torchmetrics.classification import (
     BinaryPrecision,
     BinaryRecall,
 )
-from torchvision.ops import MLP
 
 from nfm.modeling.transformer import NucleiTransformer, cls_indices
 
@@ -33,12 +35,10 @@ def _metrics(prefix: str) -> MetricCollection:
     )
 
 
-class SSLMetaArch(LightningModule):
+class SupervisedMetaArch(LightningModule):
     def __init__(
         self,
         backbone: dict[str, Any],
-        projector_dim: int = 16,
-        lamb: float = 0.02,
         lr: float = 5e-4,
         probe_lr: float = 1e-3,
         weight_decay: float = 0.05,
@@ -46,96 +46,57 @@ class SSLMetaArch(LightningModule):
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
-        self.lamb = lamb
         self.lr = lr
         self.probe_lr = probe_lr
         self.weight_decay = weight_decay
         self.warmup_steps = warmup_steps
         self.backbone = NucleiTransformer(**backbone)
         dim = self.backbone.norm.normalized_shape[0]
-        self.projector = MLP(
-            dim, [2048, 2048, projector_dim], norm_layer=nn.BatchNorm1d
-        )
-        self.sigreg = SlicingUnivariateTest(EppsPulley(n_points=17), num_slices=256)
-        self.tile_probe = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
+        self.tile_head = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
         self.nucleus_probe = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
         self.tile_metrics = _metrics("validation/tile/")
         self.nucleus_metrics = _metrics("validation/nucleus/")
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
-        """Returns the class tokens, [views, dim], and nucleus tokens, [nuclei, dim]."""
+        """Returns the class tokens, [tiles, dim], and nucleus tokens, [nuclei, dim]."""
         tokens = self.backbone(batch["features"], batch["positions"], batch["lengths"])
         cls = cls_indices(batch["lengths"])
         nuclei = torch.ones(len(tokens), dtype=torch.bool, device=tokens.device)
         nuclei[cls] = False
         return tokens[cls], tokens[nuclei]
 
-    def probe_logits(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+    def logits(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         cls, nuclei = self(batch)
-        return self.tile_probe(cls).squeeze(1), self.nucleus_probe(nuclei).squeeze(1)
+        tile = self.tile_head(cls).squeeze(1)
+        # Nucleus labels must not reach the encoder.
+        return tile, self.nucleus_probe(nuclei.detach()).squeeze(1)
 
-    def training_step(self, batch: dict[str, Any]) -> Tensor:
-        views = batch["unlabeled"]
-        n, v = views["batch_size"], views["views"]
-        embeddings, _ = self(views)
-        proj = self.projector(embeddings).reshape(v, n, -1)  # [views, batch, dim]
-        invariance = (proj.mean(0) - proj).square().mean()
-        with torch.autocast(self.device.type, enabled=False):
-            sigreg = self.sigreg(proj.float())
-        lejepa = self.lamb * sigreg + (1 - self.lamb) * invariance
-
-        # Labels must not reach the encoder, nor its batch norm statistics.
-        labeled = batch["labeled"]
-        self.backbone.eval()
-        with torch.no_grad():
-            tile_features, nucleus_features = self(labeled)
-        self.backbone.train()
-        tile_probe = F.binary_cross_entropy_with_logits(
-            self.tile_probe(tile_features).squeeze(1), labeled["labels"]
+    def training_step(self, batch: dict[str, Tensor]) -> Tensor:
+        tile_logits, nucleus_logits = self.logits(batch)
+        tile = F.binary_cross_entropy_with_logits(tile_logits, batch["labels"])
+        nucleus = F.binary_cross_entropy_with_logits(
+            nucleus_logits, batch["nucleus_labels"]
         )
-        nucleus_probe = F.binary_cross_entropy_with_logits(
-            self.nucleus_probe(nucleus_features).squeeze(1), labeled["nucleus_labels"]
-        )
-
         self.log_dict(
             {
-                "train/lejepa_loss": lejepa,
-                "train/invariance_loss": invariance,
-                "train/sigreg_loss": sigreg,
-                "train/tokens": float(len(views["features"])),
-                "train/tile_probe_loss": tile_probe,
-                "train/nucleus_probe_loss": nucleus_probe,
-                **self.embedding_statistics(embeddings.detach().float()),
+                "train/tile_loss": tile,
+                "train/nucleus_probe_loss": nucleus,
+                "train/tokens": float(len(batch["features"])),
             },
-            batch_size=n,
+            batch_size=len(tile_logits),
             prog_bar=True,
         )
-        return lejepa + tile_probe + nucleus_probe
-
-    @staticmethod
-    def embedding_statistics(embeddings: Tensor) -> dict[str, Tensor]:
-        """Spread of the class tokens, comparable across encoders.
-
-        The std is of the L2-normalized embeddings, scaled so that isotropic ones
-        give 1. The effective rank is the exponential of the entropy of the
-        normalized singular values of the centered embeddings.
-        """
-        normalized = F.normalize(embeddings, dim=1) * embeddings.size(1) ** 0.5
-        singular = torch.linalg.svdvals(embeddings - embeddings.mean(0))
-        p = singular / singular.sum()
-        return {
-            "train/embedding_std": normalized.std(0).mean(),
-            "train/embedding_rank": torch.exp(-(p * p.clamp_min(1e-12).log()).sum()),
-        }
+        return tile + nucleus
 
     def validation_step(self, batch: dict[str, Tensor]) -> None:
-        tile_logits, nucleus_logits = self.probe_logits(batch)
+        tile_logits, nucleus_logits = self.logits(batch)
         for name, logits, labels, metrics in (
             ("tile", tile_logits, batch["labels"], self.tile_metrics),
             ("nucleus", nucleus_logits, batch["nucleus_labels"], self.nucleus_metrics),
         ):
             loss = F.binary_cross_entropy_with_logits(logits, labels)
             metrics.update(logits.sigmoid(), labels.long())
+            # Named as in the self-supervised model, so runs line up.
             self.log(
                 f"validation/{name}/probe_loss",
                 loss,
@@ -148,7 +109,7 @@ class SSLMetaArch(LightningModule):
         decay, no_decay = [], []
         for name, parameter in [
             *self.backbone.named_parameters(),
-            *self.projector.named_parameters(),
+            *self.tile_head.named_parameters(),
         ]:
             # Decay would shrink the RoVE frequencies, norms and special tokens.
             skip = parameter.ndim <= 1 or name.endswith("rope.freqs")
@@ -158,10 +119,7 @@ class SSLMetaArch(LightningModule):
                 {"params": decay, "lr": self.lr, "weight_decay": self.weight_decay},
                 {"params": no_decay, "lr": self.lr, "weight_decay": 0.0},
                 {
-                    "params": [
-                        *self.tile_probe.parameters(),
-                        *self.nucleus_probe.parameters(),
-                    ],
+                    "params": self.nucleus_probe.parameters(),
                     "lr": self.probe_lr,
                     "weight_decay": 1e-7,
                 },

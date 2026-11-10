@@ -8,7 +8,7 @@ from omegaconf import DictConfig
 from rationai.mlkit import Trainer, autolog
 
 from nfm.data import DataModule
-from nfm.ssl_meta_arch import SSLMetaArch
+from nfm.supervised_meta_arch import SupervisedMetaArch
 
 
 # Print native stack traces on crashes, also in spawned DataLoader workers.
@@ -23,10 +23,10 @@ def main(config: DictConfig, logger: Logger) -> None:
 
     data = hydra.utils.instantiate(
         config.data,
-        _recursive_=False,  # to avoid instantiating all the datasets
+        _recursive_=False,  # the datasets are instantiated in setup
         _target_=DataModule,
     )
-    model = hydra.utils.instantiate(config.model, _target_=SSLMetaArch)
+    model = hydra.utils.instantiate(config.model, _target_=SupervisedMetaArch)
 
     trainer = hydra.utils.instantiate(config.trainer, _target_=Trainer, logger=logger)
     getattr(trainer, config.mode)(model, datamodule=data, ckpt_path=config.checkpoint)

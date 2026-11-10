@@ -12,15 +12,6 @@ type Augmentation = Callable[..., dict[str, NDArray[Any]]]
 type Descriptor = Callable[[NDArray[np.float32]], NDArray[np.float32]]
 
 
-def radial_polygons(
-    points: NDArray[np.float32], radii: NDArray[np.float32]
-) -> NDArray[np.float32]:
-    """Contours from the store's radial format, a [sin, cos] convention in pixels."""
-    angles = np.arange(radii.shape[1]) * 2 * np.pi / radii.shape[1]
-    directions = np.stack([np.sin(angles), np.cos(angles)], axis=-1)
-    return (points[:, None] + radii[..., None] * directions).astype(np.float32)
-
-
 def elliptic_fourier_descriptors(
     polygons: NDArray[np.floating], order: int
 ) -> NDArray[np.float32]:

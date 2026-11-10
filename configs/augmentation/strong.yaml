@@ -1,6 +1,6 @@
-# @package data.datasets.unlabeled.dataset.augmentation
-# Each view is zoomed, and its nuclei are reshaped, rescaled and dropped
-# independently, so views cannot be matched by their exact nucleus shapes.
+# @package data.augmentation
+# Each training tile is zoomed, and its nuclei are reshaped, rescaled and
+# dropped independently, as the views of the self-supervised model.
 _target_: nfm.data.augmentations.Compose
 transforms:
   - _target_: nfm.data.augmentations.Affine

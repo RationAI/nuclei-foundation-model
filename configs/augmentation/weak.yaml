@@ -1,4 +1,4 @@
-# @package data.datasets.unlabeled.dataset.augmentation
+# @package data.augmentation
 # The first version: no zoom, no per-nucleus rescaling or drop.
 _target_: nfm.data.augmentations.Compose
 transforms:

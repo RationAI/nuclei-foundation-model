@@ -2,7 +2,13 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 
-from nfm.data.nuclei import Descriptor, View, crop_view, radial_distances
+from nfm.data.nuclei import (
+    Augmentation,
+    Descriptor,
+    View,
+    crop_view,
+    radial_distances,
+)
 
 
 class ClassificationNucleiDataset(Dataset[list[View]]):
@@ -11,7 +17,8 @@ class ClassificationNucleiDataset(Dataset[list[View]]):
     A tile is positive if at least 50 % of its nuclei are. With `tiles_per_slide`,
     tiles are centered on random nuclei, for training. Without it, the whole
     slide is divided into the cells of a fixed grid, so every nucleus is in
-    exactly one tile, for evaluation.
+    exactly one tile, for evaluation. The label of an augmented tile counts the
+    nuclei left in it.
     """
 
     def __init__(
@@ -21,12 +28,14 @@ class ClassificationNucleiDataset(Dataset[list[View]]):
         tiles_per_slide: int | None = None,
         field: float = 112.0,
         descriptor: Descriptor = radial_distances,
+        augmentation: Augmentation | None = None,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
         self.annotation_path = annotation_path
         self.tiles_per_slide = tiles_per_slide
         self.field = field
         self.descriptor = descriptor
+        self.augmentation = augmentation
 
     def __len__(self) -> int:
         return len(self.slides)
@@ -70,9 +79,12 @@ class ClassificationNucleiDataset(Dataset[list[View]]):
                 polygons[members],
                 center,
                 self.field,
+                augmentation=self.augmentation,
                 descriptor=self.descriptor,
                 labels=labels[members],
             )
+            if len(tile["labels"]) == 0:  # all nuclei dropped by the augmentation
+                continue
             tile["label"] = np.float32(tile["labels"].mean() >= 0.5)
             tiles.append(tile)
         return tiles
