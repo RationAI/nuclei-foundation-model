@@ -56,7 +56,7 @@ data:
   datasets:
     unlabeled:
       slides_path: ${project_path}/train_final.parquet
-      batch_size: 8 # samples of 4 views, about 80k tokens
+      batch_size: 24 # samples of 4 views, about 210k tokens and 50 GB on an H100
       num_workers: 40
       dataset:
         _target_: nfm.data.datasets.NucleiDataset
