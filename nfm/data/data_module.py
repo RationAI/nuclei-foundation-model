@@ -1,6 +1,7 @@
 import atexit
 import faulthandler
 import os
+from functools import partial
 
 import pandas as pd
 from hydra.utils import instantiate
@@ -11,7 +12,7 @@ from omegaconf import DictConfig
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
-from nfm.data.packing import Batch, collate_tiles, collate_views
+from nfm.data.packing import Batch, collate_slides, collate_views
 from nfm.data.samplers import SourceBalancedRandomSampler
 
 
@@ -28,9 +29,16 @@ def init_worker(worker_id: int) -> None:
 
 
 class DataModule(LightningDataModule):
-    def __init__(self, datasets: DictConfig) -> None:
+    def __init__(self, datasets: DictConfig, block_size: int = 128) -> None:
+        """Initializes the data module.
+
+        Args:
+            datasets: The unlabeled and labeled dataset configurations.
+            block_size: Attention block size the views are sorted for.
+        """
         super().__init__()
         self.datasets = datasets
+        self.block_size = block_size
 
     def prepare_data(self) -> None:
         for dataset in self.datasets.values():
@@ -47,9 +55,9 @@ class DataModule(LightningDataModule):
             stratify=slides[labeled.split_stratify_col],
         )
         self.train_labeled = instantiate(
-            labeled.dataset, slides=train, tiles_per_slide=labeled.tiles_per_slide
+            labeled.dataset, slides=train, crop_nuclei=labeled.crop_nuclei
         )
-        # Whole slides, divided into tiles.
+        # Whole slides, one per batch.
         self.validation = instantiate(labeled.dataset, slides=validation)
         slides = pd.read_parquet(self.datasets.unlabeled.slides_path)
         self.train = instantiate(self.datasets.unlabeled.dataset, slides=slides)
@@ -68,7 +76,7 @@ class DataModule(LightningDataModule):
                     in_order=False,
                     multiprocessing_context="spawn",  # lance is not fork-safe
                     worker_init_fn=init_worker,
-                    collate_fn=collate_views,
+                    collate_fn=partial(collate_views, block_size=self.block_size),
                 ),
                 "labeled": DataLoader(
                     self.train_labeled,
@@ -80,7 +88,7 @@ class DataModule(LightningDataModule):
                     pin_memory=True,
                     in_order=False,
                     worker_init_fn=init_worker,
-                    collate_fn=collate_tiles,
+                    collate_fn=partial(collate_slides, block_size=self.block_size),
                 ),
             },
             mode="max_size_cycle",
@@ -95,5 +103,5 @@ class DataModule(LightningDataModule):
             pin_memory=True,
             in_order=False,
             worker_init_fn=init_worker,
-            collate_fn=collate_tiles,
+            collate_fn=partial(collate_slides, block_size=self.block_size),
         )

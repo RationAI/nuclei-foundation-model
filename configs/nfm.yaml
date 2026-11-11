@@ -24,7 +24,7 @@ trainer:
       # deletes all but the newest one.
       save_top_k: -1
       save_last: true
-      monitor: validation/tile/probe_loss
+      monitor: validation/region/probe_loss
       mode: min
 
 model:
@@ -36,6 +36,7 @@ model:
     num_heads: 6
     hidden_dim: 1024
     rope_theta: 100.0 # positions are in micrometers
+    block_size: 128
   projector_dim: 16
   lamb: 0.02
   lr: 0.0005
@@ -43,32 +44,40 @@ model:
   weight_decay: 0.05
   warmup_steps: 1000
 
-field: 128.0 # um, about 30 nuclei per tile
+# Local class tokens and the neighborhoods the attention is restricted to.
+neighborhoods:
+  _target_: nfm.data.neighborhoods.Neighborhoods
+  neighbors: 16 # a nucleus attends the blocks holding these nearest nuclei
+  nuclei_per_cls: 32 # class tokens placed by farthest point sampling
+  cls_neighbors: 128 # nuclei a class token covers
 
 data:
+  block_size: ${model.backbone.block_size}
   datasets:
     unlabeled:
       slides_path: ${project_path}/train_final.parquet
-      batch_size: 256
+      batch_size: 8 # samples of 4 views, about 80k tokens
       num_workers: 40
       dataset:
         _target_: nfm.data.datasets.NucleiDataset
         nuclei_path: ${project_path}/cells
         views: 4
-        field: ${field}
-        scale: [0.3, 1.0]
-        region_nuclei: 512
+        view_nuclei: [1024, 4096]
+        center_nuclei: 1024 # view centers among the nuclei closest to the seed
+        region_nuclei: 8192
+        min_overlap: 0.4 # Jaccard index of the nuclei of paired class tokens
+        neighborhoods: ${neighborhoods}
         descriptor: ${descriptor}
     labeled:
       slides_path: mlflow-artifacts:/37/5b9c6f096026425fa2b04c4e74b7a6f3/artifacts/panda/slides_mapping_train.parquet
       split_size: 0.2
       split_stratify_col: gleason_score
-      batch_size: 32 # slides, so 512 tiles per step
-      tiles_per_slide: 16
+      batch_size: 8 # slide crops
+      crop_nuclei: 4096
       num_workers: 6
       eval_num_workers: 6
       dataset:
         _target_: nfm.data.datasets.ClassificationNucleiDataset
         annotation_path: /mnt/projects/nuclei_based_wsi_analysis/nuclei_supervision/PANDA/Radboud/annotation
-        field: ${field}
+        neighborhoods: ${neighborhoods}
         descriptor: ${descriptor}

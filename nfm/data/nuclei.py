@@ -1,4 +1,4 @@
-"""Nuclei contours to tokens: shape descriptors and positions in a view frame."""
+"""Nuclei contours to tokens: shape features and positions in a view frame."""
 
 from collections.abc import Callable
 from typing import Any
@@ -105,51 +105,34 @@ def radial_distances(
     return (r0 + weight * (r1 - r0)).astype(np.float32)
 
 
-def crop_view(
+def make_view(
     polygons: NDArray[np.float32],
     center: NDArray[np.float32],
-    size: float,
-    max_nuclei: int | None = None,
     augmentation: Augmentation | None = None,
     descriptor: Descriptor = radial_distances,
     **extras: NDArray[Any],
 ) -> View:
-    """A square view of the nuclei whose centroids lie inside it.
+    """Tokens of a set of nuclei, in a frame centered on `center`.
 
-    The augmentation acts in the view frame, centered on the view center, before
-    cropping, so rotations, flips and scaling turn and resize the field itself.
-    It may shrink the field by less than sqrt(2).
+    The augmentation acts in that frame, so rotations, flips and scaling turn and
+    resize the whole view, and it may drop nuclei along with their extras.
 
     Args:
         polygons: Vertices in micrometers with shape [nuclei, vertices, 2].
         center: View center in micrometers.
-        size: View side length in micrometers.
-        max_nuclei: Keeps only this many nuclei, the closest to the center.
         augmentation: Called with polygons and the extras, returns them changed.
         descriptor: Shape features of the contours in the view frame.
-        extras: Per-nucleus arrays, such as ids or labels, selected alongside.
+        extras: Per-nucleus arrays, such as ids or labels, kept alongside.
 
     Returns:
-        Shape features, positions relative to the view center and the extras.
+        Shape features, positions relative to the center and the extras.
     """
-    # Only nuclei within `size` of the center can end up in the view, as long as
-    # the augmentation shrinks the field by less than sqrt(2). Shapes are not
-    # augmented for the others.
-    near = np.linalg.norm(polygons[:, 0] - center, axis=1) <= size
-    view = {
-        "polygons": polygons[near] - center,
-        **{key: value[near] for key, value in extras.items()},
-    }
+    view = {"polygons": polygons - center, **extras}
     if augmentation is not None:
         view = augmentation(**view)
-    positions = view["polygons"].mean(1)
-    keep = np.flatnonzero(np.abs(positions).max(1) <= size / 2)
-    if max_nuclei is not None and len(keep) > max_nuclei:
-        distances = np.linalg.norm(positions[keep], axis=1)
-        keep = keep[np.argpartition(distances, max_nuclei - 1)[:max_nuclei]]
-    polygons = view.pop("polygons")[keep]
+    polygons = view.pop("polygons")
     return {
         "features": descriptor(polygons),
-        "positions": positions[keep].astype(np.float32),
-        **{key: value[keep] for key, value in view.items()},
+        "positions": polygons.mean(1).astype(np.float32),
+        **view,
     }

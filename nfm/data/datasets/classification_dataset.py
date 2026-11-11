@@ -1,51 +1,39 @@
 import numpy as np
 import pandas as pd
+from scipy.spatial import cKDTree
 from torch.utils.data import Dataset
 
-from nfm.data.nuclei import Descriptor, View, crop_view, radial_distances
+from nfm.data.neighborhoods import Neighborhoods
+from nfm.data.nuclei import Descriptor, View, make_view, radial_distances
 
 
-class ClassificationNucleiDataset(Dataset[list[View]]):
-    """Tiles of one Radboud slide with nucleus labels.
+class ClassificationNucleiDataset(Dataset[View]):
+    """Nuclei of one Radboud slide with nucleus and region labels.
 
-    A tile is positive if at least 50 % of its nuclei are. With `tiles_per_slide`,
-    tiles are centered on random nuclei, for training. Without it, the whole
-    slide is divided into the cells of a fixed grid, so every nucleus is in
-    exactly one tile, for evaluation.
+    A region is the neighborhood of a local class token, and it is positive if at
+    least 50 % of its nuclei are. With `crop_nuclei`, a view is that many nuclei
+    closest to a random nucleus, for training. Without it, a view is the whole
+    slide, so every nucleus is evaluated exactly once.
     """
 
     def __init__(
         self,
         slides: pd.DataFrame,
         annotation_path: str,
-        tiles_per_slide: int | None = None,
-        field: float = 112.0,
+        neighborhoods: Neighborhoods,
+        crop_nuclei: int | None = None,
         descriptor: Descriptor = radial_distances,
     ) -> None:
         self.slides = slides.reset_index(drop=True)
         self.annotation_path = annotation_path
-        self.tiles_per_slide = tiles_per_slide
-        self.field = field
+        self.neighborhoods = neighborhoods
+        self.crop_nuclei = crop_nuclei
         self.descriptor = descriptor
 
     def __len__(self) -> int:
         return len(self.slides)
 
-    def tile_nuclei(
-        self, centroids: np.ndarray
-    ) -> list[tuple[np.ndarray, np.ndarray | slice]]:
-        """Center of each tile and the nuclei it is cropped from."""
-        if self.tiles_per_slide is not None:
-            picks = np.random.randint(len(centroids), size=self.tiles_per_slide)
-            return [(centroids[i], slice(None)) for i in picks]
-        cells = np.floor(centroids / self.field).astype(np.int64)
-        cells, members = np.unique(cells, axis=0, return_inverse=True)
-        order = np.argsort(members, kind="stable")
-        groups = np.split(order, np.cumsum(np.bincount(members))[:-1])
-        centers = ((cells + 0.5) * self.field).astype(np.float32)
-        return list(zip(centers, groups, strict=True))
-
-    def __getitem__(self, idx: int) -> list[View]:
+    def __getitem__(self, idx: int) -> View:
         slide = self.slides.iloc[idx]
         nuclei = pd.read_parquet(slide.slide_nuclei_path, columns=["id", "polygon"])
         labels = (
@@ -64,15 +52,16 @@ class ClassificationNucleiDataset(Dataset[list[View]]):
             np.stack(nuclei["polygon"]).astype(np.float32).reshape(len(nuclei), -1, 2)
             * mpp
         )
-        tiles = []
-        for center, members in self.tile_nuclei(polygons.mean(1)):
-            tile = crop_view(
-                polygons[members],
-                center,
-                self.field,
-                descriptor=self.descriptor,
-                labels=labels[members],
-            )
-            tile["label"] = np.float32(tile["labels"].mean() >= 0.5)
-            tiles.append(tile)
-        return tiles
+        centroids = polygons.mean(1)
+        if self.crop_nuclei is None:
+            center = centroids.mean(0)
+        else:
+            center = centroids[np.random.randint(len(centroids))]
+            count = min(self.crop_nuclei, len(centroids))
+            _, members = cKDTree(centroids).query(center, count)
+            polygons, labels = polygons[members], labels[members]
+        view = self.neighborhoods(
+            make_view(polygons, center, descriptor=self.descriptor, labels=labels)
+        )
+        region = view["labels"][view["cls_neighbors"]].mean(1) >= 0.5
+        return {**view, "cls_labels": region.astype(np.float32)}

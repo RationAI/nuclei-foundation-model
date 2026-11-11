@@ -76,24 +76,47 @@ class Holes:
         return {key: value[keep] for key, value in nuclei.items()}
 
 
-class ShapeNoise:
-    """Smooth radial deformation and rescaling of each contour independently.
+class NucleusAffine:
+    """Random affine map of each nucleus around its own centroid.
 
-    The radial offsets are a random Fourier series over the vertices, with the
-    harmonics up to `harmonics` and the offsets relative to the nucleus radius.
-    Each nucleus is also rescaled by a factor drawn from `scale`.
+    Each nucleus is stretched along a random axis, by independent factors from
+    `scale` along it and across it, and then rotated by up to `rotation` degrees.
+    The positions of the nuclei do not change.
     """
 
     def __init__(
-        self,
-        std: float = 0.05,
-        harmonics: int = 4,
-        scale: tuple[float, float] = (1.0, 1.0),
-        p: float = 1.0,
+        self, rotation: float = 15.0, scale: tuple[float, float] = (0.9, 1.1)
     ) -> None:
+        self.rotation = rotation
+        self.scale = scale
+
+    def __call__(self, polygons: NDArray[np.float32], **other: NDArray[Any]) -> Nuclei:
+        n = len(polygons)
+        angle = np.deg2rad(np.random.uniform(-self.rotation, self.rotation, n))
+        axis = np.random.uniform(0, np.pi, n)
+        stretch = np.random.uniform(*self.scale, (n, 2))
+        # R(angle) R(axis) diag(stretch) R(-axis), one 2 x 2 matrix per nucleus.
+        matrix = _rotations(angle + axis) @ (stretch[:, :, None] * _rotations(-axis))
+        centroids = polygons.mean(1, keepdims=True)
+        offsets = (polygons - centroids) @ matrix.transpose(0, 2, 1)
+        return {"polygons": (centroids + offsets).astype(np.float32), **other}
+
+
+def _rotations(angles: NDArray[np.floating]) -> NDArray[np.floating]:
+    cos, sin = np.cos(angles), np.sin(angles)
+    return np.stack([np.stack([cos, -sin], -1), np.stack([sin, cos], -1)], -2)
+
+
+class ShapeNoise:
+    """Smooth radial deformation of each contour independently.
+
+    The radial offsets are a random Fourier series over the vertices, with the
+    harmonics up to `harmonics` and the offsets relative to the nucleus radius.
+    """
+
+    def __init__(self, std: float = 0.05, harmonics: int = 4, p: float = 1.0) -> None:
         self.std = std
         self.harmonics = harmonics
-        self.scale = scale
         self.p = p
 
     def __call__(self, polygons: NDArray[np.float32], **other: NDArray[Any]) -> Nuclei:
@@ -106,8 +129,7 @@ class ShapeNoise:
         amplitudes = np.random.normal(0, self.std, (n, self.harmonics, 1))
         phases = np.random.uniform(0, 2 * np.pi, (n, self.harmonics, 1))
         noise = (amplitudes * np.cos(k * angles + phases)).sum(1)  # [n, vertices]
-        factor = (1 + noise) * np.random.uniform(*self.scale, (n, 1))
-        polygons = centroids + (polygons - centroids) * factor[..., None]
+        polygons = centroids + (polygons - centroids) * (1 + noise[..., None])
         return {"polygons": polygons.astype(np.float32), **other}
 
 

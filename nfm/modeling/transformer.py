@@ -1,58 +1,15 @@
-"""Transformer over packed sequences of nuclei tokens."""
+"""Transformer over packed views of nuclei with local class tokens."""
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
 
+from nfm.modeling.block_mask import neighborhood_mask
 from nfm.modeling.rove import RoVE
 
 
 flex_attention = torch.compile(flex_attention, dynamic=True)
-
-
-def document_mask(lengths: Tensor, block_size: int = 128) -> BlockMask:
-    """Full attention within each packed sequence, none across them.
-
-    Args:
-        lengths: Tokens per sequence.
-        block_size: Block size of the flex attention kernel.
-    """
-    device = lengths.device
-    documents = torch.repeat_interleave(
-        torch.arange(len(lengths), device=device), lengths
-    )
-    tokens = len(documents)
-    # The kernel works on whole blocks, the tail of the last one is out of range.
-    # A document id of its own keeps the mask in bounds there.
-    documents = F.pad(documents, (0, -tokens % block_size), value=len(lengths))
-    blocks = documents.view(-1, block_size)
-    first, last = blocks[:, 0], blocks[:, -1]
-    # Sequences are contiguous, so blocks interact when their sequence ranges do.
-    partial = (first[None] <= last[:, None]) & (last[None] >= first[:, None])
-    pure = first == last
-    full = pure[:, None] & pure[None] & (first[:, None] == first[None])
-    partial &= ~full
-
-    def ordered(blocks: Tensor) -> tuple[Tensor, Tensor]:
-        counts = blocks.sum(-1, dtype=torch.int32)
-        indices = torch.argsort(~blocks, dim=-1, stable=True).to(torch.int32)
-        return counts[None, None], indices[None, None]
-
-    def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
-        return documents[q] == documents[kv]
-
-    kv_num_blocks, kv_indices = ordered(partial)
-    full_kv_num_blocks, full_kv_indices = ordered(full)
-    return BlockMask.from_kv_blocks(
-        kv_num_blocks,
-        kv_indices,
-        full_kv_num_blocks,
-        full_kv_indices,
-        BLOCK_SIZE=block_size,
-        mask_mod=mask_mod,
-        seq_lengths=(tokens, tokens),
-    )
 
 
 class SelfAttention(nn.Module):
@@ -113,9 +70,10 @@ class Block(nn.Module):
 
 
 class NucleiTransformer(nn.Module):
-    """Encodes views of nuclei, each a class token followed by nucleus tokens.
+    """Encodes views of nuclei with local class tokens, see `neighborhood_mask`.
 
-    Nucleus tokens embed the shape features, positions enter only through RoVE.
+    Nucleus tokens embed the shape features, class tokens are one learned token,
+    and positions enter only through RoVE.
     """
 
     def __init__(
@@ -154,32 +112,33 @@ class NucleiTransformer(nn.Module):
         features: Tensor,
         positions: Tensor,
         lengths: Tensor,
-    ) -> Tensor:
+        neighbors: Tensor,
+        cls_positions: Tensor,
+        cls_lengths: Tensor,
+        cls_neighbors: Tensor,
+    ) -> tuple[Tensor, Tensor]:
         """Encodes packed views.
 
         Args:
-            features: Shape features, [tokens, in_features]. Rows of the class
-                tokens are ignored.
-            positions: Positions in micrometers, [tokens, 2].
-            lengths: Tokens per view, the first token of each is the class token.
+            features: Shape features of the nuclei, [nuclei, in_features].
+            positions: Positions of the nuclei in micrometers, [nuclei, 2].
+            lengths: Nuclei per view, [views].
+            neighbors: Nearest nuclei of each nucleus, [nuclei, k].
+            cls_positions: Positions of the class tokens, [class tokens, 2].
+            cls_lengths: Class tokens per view, [views].
+            cls_neighbors: Nuclei covered by each class token, [class tokens, k].
 
         Returns:
-            Output tokens, [tokens, dim].
+            Output nucleus tokens, [nuclei, dim], and class tokens, [cls, dim].
         """
-        cls = cls_indices(lengths)
-        nuclei = torch.ones(len(features), dtype=torch.bool, device=features.device)
-        nuclei[cls] = False
-        x = self.embed(self.input_norm(features[nuclei]))
-        tokens = x.new_empty(len(features), x.size(1))
-        tokens[nuclei] = x
-        tokens[cls] = self.cls_token.to(x.dtype)
-        tokens = tokens.float()  # fp32 residual stream
-        block_mask = document_mask(lengths, self.block_size)
+        x = self.embed(self.input_norm(features)).float()  # fp32 residual stream
+        cls = self.cls_token.float().expand(len(cls_positions), -1)
+        tokens = torch.cat([x, cls])
+        positions = torch.cat([positions, cls_positions])
+        block_mask = neighborhood_mask(
+            lengths, neighbors, cls_lengths, cls_neighbors, self.block_size
+        )
         for block in self.blocks:
             tokens = block(tokens, positions, block_mask)
-        return self.norm(tokens)
-
-
-def cls_indices(lengths: Tensor) -> Tensor:
-    """Index of the class token of each packed view."""
-    return torch.cumsum(lengths, 0) - lengths
+        tokens = self.norm(tokens)
+        return tokens[: len(features)], tokens[len(features) :]

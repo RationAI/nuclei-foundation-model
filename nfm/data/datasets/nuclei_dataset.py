@@ -1,14 +1,17 @@
+from typing import Any
+
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 from pyarrow import FixedSizeListArray
+from scipy.spatial import cKDTree
 from torch.utils.data import Dataset
 
+from nfm.data.neighborhoods import Neighborhoods, match_class_tokens
 from nfm.data.nuclei import (
     Augmentation,
     Descriptor,
-    View,
-    crop_view,
+    make_view,
     radial_distances,
     radial_polygons,
 )
@@ -19,12 +22,13 @@ def _to_numpy(column: FixedSizeListArray) -> NDArray[np.float32]:
     return flat.reshape(len(column), -1)
 
 
-class NucleiDataset(Dataset[list[View]]):
-    """Views of the nuclei of a random field, each a random square crop of it.
+class NucleiDataset(Dataset[dict[str, Any]]):
+    """Overlapping views of the nuclei around a random nucleus.
 
-    A crop covers a random share of the field area, like a random resized crop
-    of a tile, but keeps the physical scale. View centers are random nuclei, so
-    no view is empty.
+    Each view is the nuclei closest to its own center, a random number of them,
+    like a random crop of a variable share of the region. Centers are drawn among
+    the nuclei closest to the region seed, so the views overlap. Class tokens of
+    different views that cover the same nuclei are paired for the objective.
     """
 
     def __init__(
@@ -32,32 +36,40 @@ class NucleiDataset(Dataset[list[View]]):
         slides: pd.DataFrame,
         nuclei_path: str,
         augmentation: Augmentation,
+        neighborhoods: Neighborhoods,
         views: int = 4,
-        field: float = 128.0,
-        scale: tuple[float, float] = (0.3, 1.0),
-        region_nuclei: int = 512,
+        view_nuclei: tuple[int, int] = (1024, 4096),
+        center_nuclei: int = 1024,
+        region_nuclei: int = 8192,
+        min_overlap: float = 0.4,
         descriptor: Descriptor = radial_distances,
     ) -> None:
         """Initializes the dataset.
 
         Args:
-            slides: Slides to sample fields from.
+            slides: Slides to sample regions from.
             nuclei_path: Root of the lance nuclei store.
             augmentation: Applied to each view.
+            neighborhoods: Adds the nucleus neighbors and class tokens to a view.
             views: Number of views.
-            field: Side length of the field in micrometers.
-            scale: Range of the share of the field area covered by a view.
-            region_nuclei: Nuclei loaded around the field center. Must cover a
-                circle of radius field / sqrt(2), so rotated views stay inside.
+            view_nuclei: Range of the number of nuclei in a view.
+            center_nuclei: View centers are among this many nuclei closest to the
+                seed, which sets how far apart the views are.
+            region_nuclei: Nuclei loaded around the seed. A view is cut short
+                where it reaches beyond them.
+            min_overlap: Least Jaccard index of the nuclei covered by two paired
+                class tokens.
             descriptor: Shape features of a contour in the view frame.
         """
         self.slides = slides.reset_index(drop=True)
         self.nuclei_path = nuclei_path
         self.augmentation = augmentation
+        self.neighborhoods = neighborhoods
         self.views = views
-        self.field = field
-        self.scale = scale
+        self.view_nuclei = view_nuclei
+        self.center_nuclei = center_nuclei
         self.region_nuclei = region_nuclei
+        self.min_overlap = min_overlap
         self.descriptor = descriptor
 
     def __len__(self) -> int:
@@ -91,23 +103,24 @@ class NucleiDataset(Dataset[list[View]]):
         polygons = radial_polygons(points, _to_numpy(table["radial_distances"]))
         return polygons * mpp, seed * mpp
 
-    def __getitem__(self, idx: int) -> list[View]:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         polygons, seed = self.load_region(self.slides.iloc[idx])
         centroids = polygons.mean(1)
-        offsets = np.abs(centroids - seed).max(1)
+        tree = cKDTree(centroids)
+        _, near_seed = tree.query(seed, min(self.center_nuclei, len(centroids)))
+        ids = np.arange(len(polygons))
         views = []
         for _ in range(self.views):
-            size = self.field * np.sqrt(np.random.uniform(*self.scale))
-            # Centers keep the whole view inside the field, the seed always can.
-            inside = offsets <= max((self.field - size) / 2, offsets.min())
-            center = centroids[np.random.choice(np.flatnonzero(inside))]
-            views.append(
-                crop_view(
-                    polygons,
-                    center,
-                    size,
-                    augmentation=self.augmentation,
-                    descriptor=self.descriptor,
-                )
+            center = centroids[np.random.choice(np.atleast_1d(near_seed))]
+            count = np.random.randint(self.view_nuclei[0], self.view_nuclei[1] + 1)
+            _, nuclei = tree.query(center, min(count, len(centroids)))
+            nuclei = np.atleast_1d(nuclei)
+            view = make_view(
+                polygons[nuclei],
+                center,
+                self.augmentation,
+                self.descriptor,
+                ids=ids[nuclei],
             )
-        return views
+            views.append(self.neighborhoods(view))
+        return {"views": views, "pairs": match_class_tokens(views, self.min_overlap)}

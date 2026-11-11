@@ -1,4 +1,4 @@
-"""LeJEPA on nuclei tokens with detached tile and nucleus probes."""
+"""LeJEPA on local class tokens of nuclei, with detached region and nucleus probes."""
 
 import math
 from typing import Any
@@ -18,7 +18,7 @@ from torchmetrics.classification import (
 )
 from torchvision.ops import MLP
 
-from nfm.modeling.transformer import NucleiTransformer, cls_indices
+from nfm.modeling.transformer import NucleiTransformer
 
 
 def _metrics(prefix: str) -> MetricCollection:
@@ -57,28 +57,39 @@ class SSLMetaArch(LightningModule):
             dim, [2048, 2048, projector_dim], norm_layer=nn.BatchNorm1d
         )
         self.sigreg = SlicingUnivariateTest(EppsPulley(n_points=17), num_slices=256)
-        self.tile_probe = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
+        self.region_probe = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
         self.nucleus_probe = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
-        self.tile_metrics = _metrics("validation/tile/")
+        self.region_metrics = _metrics("validation/region/")
         self.nucleus_metrics = _metrics("validation/nucleus/")
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
-        """Returns the class tokens, [views, dim], and nucleus tokens, [nuclei, dim]."""
-        tokens = self.backbone(batch["features"], batch["positions"], batch["lengths"])
-        cls = cls_indices(batch["lengths"])
-        nuclei = torch.ones(len(tokens), dtype=torch.bool, device=tokens.device)
-        nuclei[cls] = False
-        return tokens[cls], tokens[nuclei]
+        """Returns the class tokens, [class tokens, dim], and nucleus tokens."""
+        nuclei, cls = self.backbone(
+            batch["features"],
+            batch["positions"],
+            batch["lengths"],
+            batch["neighbors"],
+            batch["cls_positions"],
+            batch["cls_lengths"],
+            batch["cls_neighbors"],
+        )
+        return cls, nuclei
 
     def probe_logits(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         cls, nuclei = self(batch)
-        return self.tile_probe(cls).squeeze(1), self.nucleus_probe(nuclei).squeeze(1)
+        return (
+            self.region_probe(cls).squeeze(1),
+            self.nucleus_probe(nuclei).squeeze(1),
+        )
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         views = batch["unlabeled"]
-        n, v = views["batch_size"], views["views"]
-        embeddings, _ = self(views)
-        proj = self.projector(embeddings).reshape(v, n, -1)  # [views, batch, dim]
+        cls, _ = self(views)
+        # Class tokens of different views that cover the same nuclei are paired,
+        # and each predicts the center of its pair.
+        first, second = views["pairs"]
+        embeddings = torch.cat([cls[first], cls[second]])
+        proj = self.projector(embeddings).unflatten(0, (2, -1))  # [2, pairs, dim]
         invariance = (proj.mean(0) - proj).square().mean()
         with torch.autocast(self.device.type, enabled=False):
             sigreg = self.sigreg(proj.float())
@@ -88,13 +99,13 @@ class SSLMetaArch(LightningModule):
         labeled = batch["labeled"]
         self.backbone.eval()
         with torch.no_grad():
-            tile_features, nucleus_features = self(labeled)
+            region_features, nucleus_features = self(labeled)
         self.backbone.train()
-        tile_probe = F.binary_cross_entropy_with_logits(
-            self.tile_probe(tile_features).squeeze(1), labeled["labels"]
+        region_probe = F.binary_cross_entropy_with_logits(
+            self.region_probe(region_features).squeeze(1), labeled["cls_labels"]
         )
         nucleus_probe = F.binary_cross_entropy_with_logits(
-            self.nucleus_probe(nucleus_features).squeeze(1), labeled["nucleus_labels"]
+            self.nucleus_probe(nucleus_features).squeeze(1), labeled["labels"]
         )
 
         self.log_dict(
@@ -102,19 +113,21 @@ class SSLMetaArch(LightningModule):
                 "train/lejepa_loss": lejepa,
                 "train/invariance_loss": invariance,
                 "train/sigreg_loss": sigreg,
-                "train/tokens": float(len(views["features"])),
-                "train/tile_probe_loss": tile_probe,
+                "train/tokens": float(len(views["features"]) + len(cls)),
+                "train/class_tokens": float(len(cls)),
+                "train/pairs": float(first.numel()),
+                "train/region_probe_loss": region_probe,
                 "train/nucleus_probe_loss": nucleus_probe,
                 **self.embedding_statistics(embeddings.detach().float()),
             },
-            batch_size=n,
+            batch_size=views["batch_size"],
             prog_bar=True,
         )
-        return lejepa + tile_probe + nucleus_probe
+        return lejepa + region_probe + nucleus_probe
 
     @staticmethod
     def embedding_statistics(embeddings: Tensor) -> dict[str, Tensor]:
-        """Spread of the class tokens, comparable across encoders.
+        """Spread of the paired class tokens, comparable across encoders.
 
         The std is of the L2-normalized embeddings, scaled so that isotropic ones
         give 1. The effective rank is the exponential of the entropy of the
@@ -129,10 +142,10 @@ class SSLMetaArch(LightningModule):
         }
 
     def validation_step(self, batch: dict[str, Tensor]) -> None:
-        tile_logits, nucleus_logits = self.probe_logits(batch)
+        region_logits, nucleus_logits = self.probe_logits(batch)
         for name, logits, labels, metrics in (
-            ("tile", tile_logits, batch["labels"], self.tile_metrics),
-            ("nucleus", nucleus_logits, batch["nucleus_labels"], self.nucleus_metrics),
+            ("region", region_logits, batch["cls_labels"], self.region_metrics),
+            ("nucleus", nucleus_logits, batch["labels"], self.nucleus_metrics),
         ):
             loss = F.binary_cross_entropy_with_logits(logits, labels)
             metrics.update(logits.sigmoid(), labels.long())
@@ -159,7 +172,7 @@ class SSLMetaArch(LightningModule):
                 {"params": no_decay, "lr": self.lr, "weight_decay": 0.0},
                 {
                     "params": [
-                        *self.tile_probe.parameters(),
+                        *self.region_probe.parameters(),
                         *self.nucleus_probe.parameters(),
                     ],
                     "lr": self.probe_lr,
