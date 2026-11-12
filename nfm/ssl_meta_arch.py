@@ -1,4 +1,4 @@
-"""LeJEPA on local class tokens of nuclei, with detached region and nucleus probes."""
+"""LeJEPA on pooled Voronoi cells of nuclei, with detached region and nucleus probes."""
 
 import math
 from typing import Any
@@ -18,6 +18,7 @@ from torchmetrics.classification import (
 )
 from torchvision.ops import MLP
 
+from nfm.modeling.pooling import pooling as make_pooling
 from nfm.modeling.transformer import NucleiTransformer
 
 
@@ -37,6 +38,7 @@ class SSLMetaArch(LightningModule):
     def __init__(
         self,
         backbone: dict[str, Any],
+        pooling: dict[str, Any] | None = None,
         projector_dim: int = 16,
         lamb: float = 0.02,
         lr: float = 5e-4,
@@ -53,6 +55,8 @@ class SSLMetaArch(LightningModule):
         self.warmup_steps = warmup_steps
         self.backbone = NucleiTransformer(**backbone)
         dim = self.backbone.norm.normalized_shape[0]
+        # Part of the encoder: trained by the objective, frozen for the probes.
+        self.pooling = make_pooling(dim, **(pooling or {}))
         self.projector = MLP(
             dim, [2048, 2048, projector_dim], norm_layer=nn.BatchNorm1d
         )
@@ -62,25 +66,24 @@ class SSLMetaArch(LightningModule):
         self.region_metrics = _metrics("validation/region/")
         self.nucleus_metrics = _metrics("validation/nucleus/")
 
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
-        """Returns the class tokens, [class tokens, dim], and nucleus tokens."""
-        nuclei, cls = self.backbone(
-            batch["features"],
-            batch["positions"],
-            batch["lengths"],
-            batch["neighbors"],
-            batch["cls_positions"],
-            batch["cls_lengths"],
-            batch["cls_neighbors"],
+    def forward(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
+        """Returns the cell embeddings, [cells, dim], and nucleus tokens."""
+        nuclei = self.backbone(
+            batch["features"], batch["positions"], batch["lengths"], batch["neighbors"]
         )
-        return cls, nuclei
+        return self.pooling(nuclei, batch["cells"], batch["cell_count"]), nuclei
 
-    def probe_logits(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
-        cls, nuclei = self(batch)
+    def probe_logits(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
+        regions, nuclei = self(batch)
         return (
-            self.region_probe(cls).squeeze(1),
+            self.region_probe(regions).squeeze(1),
             self.nucleus_probe(nuclei).squeeze(1),
         )
+
+    def encoder_eval(self, mode: bool = True) -> None:
+        """Sets the encoder and the pooling, which belongs to it, to eval mode."""
+        self.backbone.train(not mode)
+        self.pooling.train(not mode)
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         if torch.cuda.is_available():
@@ -89,11 +92,11 @@ class SSLMetaArch(LightningModule):
             self.log("train/gpu_memory_peak", peak, batch_size=1)
             torch.cuda.reset_peak_memory_stats()
         views = batch["unlabeled"]
-        cls, _ = self(views)
-        # Class tokens of different views that cover the same nuclei are paired,
-        # and each predicts the center of its pair.
+        regions, _ = self(views)
+        # Cells of different views that hold the same nuclei are paired, and each
+        # predicts the center of its pair.
         first, second = views["pairs"]
-        embeddings = torch.cat([cls[first], cls[second]])
+        embeddings = torch.cat([regions[first], regions[second]])
         proj = self.projector(embeddings).unflatten(0, (2, -1))  # [2, pairs, dim]
         invariance = (proj.mean(0) - proj).square().mean()
         with torch.autocast(self.device.type, enabled=False):
@@ -102,12 +105,12 @@ class SSLMetaArch(LightningModule):
 
         # Labels must not reach the encoder, nor its batch norm statistics.
         labeled = batch["labeled"]
-        self.backbone.eval()
+        self.encoder_eval()
         with torch.no_grad():
             region_features, nucleus_features = self(labeled)
-        self.backbone.train()
+        self.encoder_eval(False)
         region_probe = F.binary_cross_entropy_with_logits(
-            self.region_probe(region_features).squeeze(1), labeled["cls_labels"]
+            self.region_probe(region_features).squeeze(1), labeled["cell_labels"]
         )
         nucleus_probe = F.binary_cross_entropy_with_logits(
             self.nucleus_probe(nucleus_features).squeeze(1), labeled["labels"]
@@ -118,8 +121,8 @@ class SSLMetaArch(LightningModule):
                 "train/lejepa_loss": lejepa,
                 "train/invariance_loss": invariance,
                 "train/sigreg_loss": sigreg,
-                "train/tokens": float(len(views["features"]) + len(cls)),
-                "train/class_tokens": float(len(cls)),
+                "train/tokens": float(len(views["features"])),
+                "train/cells": float(len(regions)),
                 "train/pairs": float(first.numel()),
                 "train/region_probe_loss": region_probe,
                 "train/nucleus_probe_loss": nucleus_probe,
@@ -132,7 +135,7 @@ class SSLMetaArch(LightningModule):
 
     @staticmethod
     def embedding_statistics(embeddings: Tensor) -> dict[str, Tensor]:
-        """Spread of the paired class tokens, comparable across encoders.
+        """Spread of the paired cell embeddings, comparable across encoders.
 
         The std is of the L2-normalized embeddings, scaled so that isotropic ones
         give 1. The effective rank is the exponential of the entropy of the
@@ -150,7 +153,7 @@ class SSLMetaArch(LightningModule):
     def validation_step(self, batch: dict[str, Tensor]) -> None:
         region_logits, nucleus_logits = self.probe_logits(batch)
         for name, logits, labels, metrics in (
-            ("region", region_logits, batch["cls_labels"], self.region_metrics),
+            ("region", region_logits, batch["cell_labels"], self.region_metrics),
             ("nucleus", nucleus_logits, batch["labels"], self.nucleus_metrics),
         ):
             loss = F.binary_cross_entropy_with_logits(logits, labels)
@@ -167,6 +170,7 @@ class SSLMetaArch(LightningModule):
         decay, no_decay = [], []
         for name, parameter in [
             *self.backbone.named_parameters(),
+            *self.pooling.named_parameters(),
             *self.projector.named_parameters(),
         ]:
             # Decay would shrink the RoVE frequencies, norms and special tokens.

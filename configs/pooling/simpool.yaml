@@ -1,0 +1,4 @@
+# @package model.pooling
+# The cell average queries the nuclei, a generalized mean pools them.
+kind: simpool
+gamma: 1.25

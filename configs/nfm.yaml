@@ -2,6 +2,7 @@ defaults:
   - base
   - descriptor: radial
   - augmentation: strong
+  - pooling: simpool
   - _self_
 
 seed: 0
@@ -48,12 +49,11 @@ model:
   weight_decay: 0.05
   warmup_steps: 1000
 
-# Local class tokens and the neighborhoods the attention is restricted to.
+# Neighborhoods of the attention, and the Voronoi cells pooled into regions.
 neighborhoods:
   _target_: nfm.data.neighborhoods.Neighborhoods
   neighbors: 16 # a nucleus attends the blocks holding these nearest nuclei
-  nuclei_per_cls: 32 # class tokens placed by farthest point sampling
-  cls_neighbors: 128 # nuclei a class token covers
+  nuclei_per_cell: 64 # cell seeds placed by farthest point sampling
 
 data:
   block_size: ${model.backbone.block_size}
@@ -73,7 +73,7 @@ data:
         view_nuclei: [1024, 4096]
         center_nuclei: 1024 # view centers among the nuclei closest to the seed
         region_nuclei: 8192
-        min_overlap: 0.4 # Jaccard index of the nuclei of paired class tokens
+        min_overlap: 0.3 # Jaccard index of the nuclei of paired cells
         neighborhoods: ${neighborhoods}
         descriptor: ${descriptor}
     labeled:

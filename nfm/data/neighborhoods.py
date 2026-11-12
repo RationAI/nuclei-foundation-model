@@ -1,4 +1,4 @@
-"""Spatial neighborhoods of nuclei and the local class tokens."""
+"""Spatial neighborhoods of nuclei and their Voronoi cells."""
 
 from itertools import combinations
 from typing import Any
@@ -36,55 +36,55 @@ def _nearest(tree: cKDTree, queries: NDArray[np.float32], k: int) -> NDArray[Any
 
 
 class Neighborhoods:
-    """Adds the neighbors of each nucleus and the local class tokens to a view.
+    """Adds the nearest neighbors of each nucleus and Voronoi cells to a view.
 
-    Class tokens are placed at nuclei chosen by farthest point sampling, one per
-    `nuclei_per_cls` nuclei, and each covers its `cls_neighbors` nearest nuclei.
-    Indices are local to the view.
+    Cell seeds are nuclei chosen by farthest point sampling, one per
+    `nuclei_per_cell` nuclei, and each nucleus belongs to the cell of the seed
+    closest to it. Indices are local to the view.
     """
 
-    def __init__(
-        self, neighbors: int = 16, nuclei_per_cls: int = 32, cls_neighbors: int = 128
-    ) -> None:
+    def __init__(self, neighbors: int = 16, nuclei_per_cell: int = 64) -> None:
         self.neighbors = neighbors
-        self.nuclei_per_cls = nuclei_per_cls
-        self.cls_neighbors = cls_neighbors
+        self.nuclei_per_cell = nuclei_per_cell
 
     def __call__(self, view: View) -> View:
         positions = view["positions"]
-        tree = cKDTree(positions)
-        count = -(-len(positions) // self.nuclei_per_cls)
-        cls_positions = positions[farthest_point_sampling(positions, count)]
+        count = -(-len(positions) // self.nuclei_per_cell)
+        seeds = positions[farthest_point_sampling(positions, count)].reshape(-1, 2)
+        cells = (
+            cKDTree(seeds).query(positions)[1]
+            if len(seeds)
+            else np.zeros(0, dtype=np.int64)
+        )
         return {
             **view,
-            "neighbors": _nearest(tree, positions, self.neighbors),
-            "cls_positions": cls_positions.reshape(-1, 2),
-            "cls_neighbors": _nearest(tree, cls_positions, self.cls_neighbors),
+            "neighbors": _nearest(cKDTree(positions), positions, self.neighbors),
+            "cells": cells.astype(np.int64),
+            "cell_seeds": seeds,
         }
 
 
-def match_class_tokens(views: list[View], min_overlap: float) -> NDArray[Any]:
-    """Pairs of class tokens in different views that cover the same nuclei.
+def match_cells(views: list[View], min_overlap: float) -> NDArray[Any]:
+    """Pairs of cells in different views that hold the same nuclei.
 
-    Two class tokens are paired when each is the other's best match by the
-    Jaccard index of their nucleus ids, and that index is at least `min_overlap`.
+    Two cells are paired when each is the other's best match by the Jaccard
+    index of their nucleus ids, and that index is at least `min_overlap`.
 
     Returns:
-        Rows of (view, class token, other view, other class token), [pairs, 4].
+        Rows of (view, cell, other view, other cell), [pairs, 4].
     """
     size = max(int(v["ids"].max(initial=0)) for v in views) + 1
-    covers = []
+    members = []
     for view in views:
-        cover = np.zeros((len(view["cls_neighbors"]), size), dtype=np.float32)
-        rows = np.arange(len(cover))[:, None]
-        cover[rows, view["ids"][view["cls_neighbors"]]] = 1
-        covers.append(cover)
+        member = np.zeros((len(view["cell_seeds"]), size), dtype=np.float32)
+        member[view["cells"], view["ids"]] = 1
+        members.append(member)
     pairs = [np.zeros((0, 4), dtype=np.int64)]
     for a, b in combinations(range(len(views)), 2):
-        if len(covers[a]) == 0 or len(covers[b]) == 0:
+        if len(members[a]) == 0 or len(members[b]) == 0:
             continue
-        shared = covers[a] @ covers[b].T
-        union = covers[a].sum(1)[:, None] + covers[b].sum(1)[None] - shared
+        shared = members[a] @ members[b].T
+        union = members[a].sum(1)[:, None] + members[b].sum(1)[None] - shared
         jaccard = shared / np.maximum(union, 1)
         best_b, best_a = jaccard.argmax(1), jaccard.argmax(0)
         i = np.flatnonzero(

@@ -4,4 +4,4 @@ mode: fit
 
 metadata:
   run_name: Token LeJEPA nuclei transformer
-  description: LeJEPA on local class tokens of nuclei with online Radboud region and nucleus probes
+  description: LeJEPA on pooled Voronoi cells of nuclei with online Radboud region and nucleus probes

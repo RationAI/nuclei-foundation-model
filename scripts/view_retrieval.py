@@ -1,9 +1,9 @@
-"""How easily paired class tokens can be matched without learning anything.
+"""How easily paired cells can be matched without learning anything.
 
-The nuclei covered by each paired class token get a fingerprint: quantiles of
+The nuclei of each paired cell get a fingerprint: quantiles of
 rotation and flip invariant nucleus statistics, the log mean radius and the
 relative Fourier magnitudes of the radial distances (elongation and finer
-shape). The score is the share of pairs whose first class token has its partner
+shape). The score is the share of pairs whose first cell has its partner
 as the nearest fingerprint among the partners of all pairs. High values mean the
 invariance objective can be met by matching nucleus statistics, whatever the
 descriptor, so it measures the augmentations.
@@ -56,9 +56,9 @@ def main(overrides: list[str]) -> None:
     np.random.seed(0)
     samples = [dataset[i] for i in np.random.randint(len(dataset), size=SAMPLES)]
 
-    def covered(sample: dict, view: int, token: int) -> np.ndarray:
+    def covered(sample: dict, view: int, cell: int) -> np.ndarray:
         view = sample["views"][view]
-        return fingerprint(view["features"][view["cls_neighbors"][token]])
+        return fingerprint(view["features"][view["cells"] == cell])
 
     prints = np.array(
         [
@@ -73,7 +73,7 @@ def main(overrides: list[str]) -> None:
     pairs = len(prints)
     accuracy = np.mean(distances.argmin(1) == np.arange(pairs))
     print(
-        f"top-1 class token retrieval among {pairs} pairs: {accuracy:.1%} "
+        f"top-1 cell retrieval among {pairs} pairs: {accuracy:.1%} "
         f"(chance {1 / pairs:.2%})"
     )
 

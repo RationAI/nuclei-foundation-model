@@ -1,0 +1,6 @@
+# @package model.pooling
+# A query per cell attends to the nuclei of the cell in two layers.
+kind: attention
+num_heads: 12
+depth: 2
+hidden_dim: 2048

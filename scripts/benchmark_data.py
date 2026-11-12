@@ -82,10 +82,10 @@ def main(overrides: list[str]) -> None:
     threadpool_limits(limits=1)  # as in the workers
     wrap(unlabeled_module.NucleiDataset, "load_region", "unlabeled: lance region query")
     wrap(unlabeled_module, "make_view", "unlabeled: augmentation and features")
-    wrap(unlabeled_module, "match_class_tokens", "unlabeled: class token pairs")
+    wrap(unlabeled_module, "match_cells", "unlabeled: cell pairs")
     wrap(labeled_module.pd, "read_parquet", "labeled: parquet reads")
     wrap(labeled_module, "make_view", "labeled: features")
-    wrap(neighborhoods.Neighborhoods, "__call__", "both: neighbors and class tokens")
+    wrap(neighborhoods.Neighborhoods, "__call__", "both: neighbors and cells")
     np.random.seed(0)
     for i in np.random.randint(len(data.train), size=8):
         with timed("unlabeled: sample"):

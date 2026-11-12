@@ -1,4 +1,4 @@
-"""Transformer over packed views of nuclei with local class tokens."""
+"""Transformer over packed views of nuclei."""
 
 import torch
 import torch.nn.functional as F
@@ -88,10 +88,9 @@ class Block(nn.Module):
 
 
 class NucleiTransformer(nn.Module):
-    """Encodes views of nuclei with local class tokens, see `neighborhood_mask`.
+    """Encodes views of nuclei with neighborhood attention, see `neighborhood_mask`.
 
-    Nucleus tokens embed the shape features, class tokens are one learned token,
-    and positions enter only through RoVE.
+    Nucleus tokens embed the shape features, and positions enter only through RoVE.
     """
 
     def __init__(
@@ -132,7 +131,6 @@ class NucleiTransformer(nn.Module):
             if mlp_embed
             else nn.Linear(in_features, dim)
         )
-        self.cls_token = nn.Parameter(torch.randn(dim) * 0.02)
         self.blocks = nn.ModuleList(
             Block(
                 dim,
@@ -150,15 +148,8 @@ class NucleiTransformer(nn.Module):
                 block.compile(dynamic=True)
 
     def forward(
-        self,
-        features: Tensor,
-        positions: Tensor,
-        lengths: Tensor,
-        neighbors: Tensor,
-        cls_positions: Tensor,
-        cls_lengths: Tensor,
-        cls_neighbors: Tensor,
-    ) -> tuple[Tensor, Tensor]:
+        self, features: Tensor, positions: Tensor, lengths: Tensor, neighbors: Tensor
+    ) -> Tensor:
         """Encodes packed views.
 
         Args:
@@ -166,21 +157,12 @@ class NucleiTransformer(nn.Module):
             positions: Positions of the nuclei in micrometers, [nuclei, 2].
             lengths: Nuclei per view, [views].
             neighbors: Nearest nuclei of each nucleus, [nuclei, k].
-            cls_positions: Positions of the class tokens, [class tokens, 2].
-            cls_lengths: Class tokens per view, [views].
-            cls_neighbors: Nuclei covered by each class token, [class tokens, k].
 
         Returns:
-            Output nucleus tokens, [nuclei, dim], and class tokens, [cls, dim].
+            Output nucleus tokens, [nuclei, dim].
         """
-        x = self.embed(self.input_norm(features)).float()  # fp32 residual stream
-        cls = self.cls_token.float().expand(len(cls_positions), -1)
-        tokens = torch.cat([x, cls])
-        positions = torch.cat([positions, cls_positions])
-        block_mask = neighborhood_mask(
-            lengths, neighbors, cls_lengths, cls_neighbors, self.block_size
-        )
+        tokens = self.embed(self.input_norm(features)).float()  # fp32 residual stream
+        block_mask = neighborhood_mask(lengths, neighbors, self.block_size)
         for block in self.blocks:
             tokens = block(tokens, positions, block_mask)
-        tokens = self.norm(tokens)
-        return tokens[: len(features)], tokens[len(features) :]
+        return self.norm(tokens)

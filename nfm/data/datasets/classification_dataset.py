@@ -10,8 +10,8 @@ from nfm.data.nuclei import Descriptor, View, make_view, radial_distances
 class ClassificationNucleiDataset(Dataset[View]):
     """Nuclei of one Radboud slide with nucleus and region labels.
 
-    A region is the neighborhood of a local class token, and it is positive if at
-    least 50 % of its nuclei are. With `crop_nuclei`, a view is that many nuclei
+    A region is a Voronoi cell of the nuclei, and it is positive if at least 50 %
+    of its nuclei are. With `crop_nuclei`, a view is that many nuclei
     closest to a random nucleus, for training. Without it, a view is the whole
     slide, so every nucleus is evaluated exactly once.
     """
@@ -63,5 +63,8 @@ class ClassificationNucleiDataset(Dataset[View]):
         view = self.neighborhoods(
             make_view(polygons, center, descriptor=self.descriptor, labels=labels)
         )
-        region = view["labels"][view["cls_neighbors"]].mean(1) >= 0.5
-        return {**view, "cls_labels": region.astype(np.float32)}
+        count = len(view["cell_seeds"])
+        positive = np.bincount(view["cells"], view["labels"], minlength=count)
+        size = np.bincount(view["cells"], minlength=count)
+        region = positive / np.maximum(size, 1) >= 0.5
+        return {**view, "cell_labels": region.astype(np.float32)}
