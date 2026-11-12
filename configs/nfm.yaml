@@ -63,7 +63,7 @@ data:
       # Samples of 4 views, about 104k tokens. Without checkpointing, a step peaks
       # at about 54 GiB, 65 GiB for the largest batches. With checkpoint_every: 1,
       # about 64 samples fit.
-      batch_size: 12
+      batch_size: 16
       # A worker builds a batch in about 3 s.
       num_workers: 16
       dataset:
