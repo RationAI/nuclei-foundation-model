@@ -28,9 +28,12 @@ class SelfAttention(nn.Module):
     def forward(self, x: Tensor, positions: Tensor, block_mask: BlockMask) -> Tensor:
         # [tokens, 3 * dim] -> 3 x [1, heads, tokens, head_dim]
         q, k, v = self.qkv(x).unflatten(-1, (3, self.num_heads, -1)).permute(1, 2, 0, 3)
-        q = self.rope(self.q_norm(q), positions)
-        k = self.rope(self.k_norm(k), positions)
-        v = self.rope(self.v_norm(v), positions)
+        # Norms return float32 under autocast, attention runs in the dtype of the
+        # projection, bfloat16 under autocast.
+        dtype = q.dtype
+        q = self.rope(self.q_norm(q), positions).to(dtype)
+        k = self.rope(self.k_norm(k), positions).to(dtype)
+        v = self.rope(self.v_norm(v), positions).to(dtype)
         x = flex_attention(q[None], k[None], v[None], block_mask=block_mask)[0]
         x = self.rope(x, positions, inverse=True)
         return self.out(x.transpose(0, 1).flatten(1))
