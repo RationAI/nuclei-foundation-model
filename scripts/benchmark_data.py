@@ -1,9 +1,10 @@
 """Throughput of each data loader alone, to find which one starves the GPU.
 
-Each loader runs with its configured workers and without the model, so its
-seconds per batch can be compared with the seconds per step of training. Then one
-sample of each kind is profiled in this process: a stage whose wall time is well
-above its CPU time waits for storage rather than computing.
+Each loader runs alone with its configured workers and without the model, long
+enough to pass its prefetched batches, so its steady seconds per batch can be
+compared with the seconds per step of training. Then, with all workers stopped,
+one sample of each kind is profiled in this process: a stage whose wall time is
+well above its CPU time waits for storage rather than computing.
 
     uv run python scripts/benchmark_data.py [overrides]
 """
@@ -18,24 +19,24 @@ from typing import Any
 import hydra
 import numpy as np
 from hydra import compose, initialize_config_dir
+from threadpoolctl import threadpool_limits
 
 import nfm.data.datasets.classification_dataset as labeled_module
 import nfm.data.datasets.nuclei_dataset as unlabeled_module
 from nfm.data import DataModule, neighborhoods
 
 
-BATCHES = 20
-WARMUP = 5
-
-
 def throughput(name: str, loader: Any, workers: int) -> None:
+    # Each worker prefetches two batches, which come out at once at the start.
+    batches = max(20, 2 * workers)
     iterator = iter(loader)
-    for _ in range(WARMUP):  # workers start and fill their queues
+    for _ in range(batches):
         next(iterator)
     start = time.perf_counter()
-    for _ in range(BATCHES):
+    for _ in range(batches):
         next(iterator)
-    seconds = (time.perf_counter() - start) / BATCHES
+    seconds = (time.perf_counter() - start) / batches
+    iterator._shutdown_workers()  # so they do not compete with the next loader
     print(f"{name:12s} {workers:3d} workers: {seconds:6.2f} s per batch", flush=True)
 
 
@@ -72,12 +73,13 @@ def main(overrides: list[str]) -> None:
     data.setup("fit")
     datasets = config.data.datasets
 
-    print(f"Loaders alone, {BATCHES} batches after {WARMUP} warm-up batches:")
+    print("Loaders alone, steady state:")
     loaders = data.train_dataloader().iterables
     throughput("unlabeled", loaders["unlabeled"], datasets.unlabeled.num_workers)
     throughput("labeled", loaders["labeled"], datasets.labeled.num_workers)
     throughput("validation", data.val_dataloader(), datasets.labeled.eval_num_workers)
 
+    threadpool_limits(limits=1)  # as in the workers
     wrap(unlabeled_module.NucleiDataset, "load_region", "unlabeled: lance region query")
     wrap(unlabeled_module, "make_view", "unlabeled: augmentation and features")
     wrap(unlabeled_module, "match_class_tokens", "unlabeled: class token pairs")

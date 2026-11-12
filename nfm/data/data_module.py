@@ -10,6 +10,7 @@ from lightning.pytorch.utilities import CombinedLoader
 from mlflow.artifacts import download_artifacts
 from omegaconf import DictConfig
 from sklearn.model_selection import train_test_split
+from threadpoolctl import threadpool_limits
 from torch.utils.data import DataLoader
 
 from nfm.data.packing import Batch, collate_slides, collate_views
@@ -21,11 +22,14 @@ def init_worker(worker_id: int) -> None:
 
     Prints native stack traces when the worker crashes. PyTorch replaces the
     crash handlers in each worker, so they are re-enabled here. Workers exit
-    without native finalization, where lance sometimes aborts.
+    without native finalization, where lance sometimes aborts. The workers are
+    the unit of parallelism, so BLAS gets one thread: with a thread per core in
+    every worker, the small matrix products wait for each other.
     """
     faulthandler.disable()
     faulthandler.enable()
     atexit.register(os._exit, 0)
+    threadpool_limits(limits=1)
 
 
 class DataModule(LightningDataModule):
