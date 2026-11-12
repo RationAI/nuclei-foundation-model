@@ -75,7 +75,7 @@ data:
       batch_size: 8 # slide crops
       crop_nuclei: 4096
       num_workers: 6
-      eval_num_workers: 6
+      eval_num_workers: 24 # the training workers are idle during validation
       dataset:
         _target_: nfm.data.datasets.ClassificationNucleiDataset
         annotation_path: /mnt/projects/nuclei_based_wsi_analysis/nuclei_supervision/PANDA/Radboud/annotation
