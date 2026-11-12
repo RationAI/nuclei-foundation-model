@@ -36,10 +36,10 @@ model:
     depth: 14
     num_heads: 12
     hidden_dim: 2048
-    # Every n-th block keeps only its input for the backward pass: 1 needs about
-    # 95 KB of activations per token and 27 % more time, 2 about 295 KB and 13 %,
-    # 0 (none) 527 KB. See train/gpu_memory_peak for what a batch needs.
-    checkpoint_every: 1
+    # Every n-th block keeps only its input for the backward pass: 0 (none) needs
+    # about 527 KB of activations per token, 1 about 95 KB for 27 % more time and
+    # 2 about 295 KB for 13 %. See train/gpu_memory_peak for what a batch needs.
+    checkpoint_every: 0
     rope_theta: 100.0 # positions are in micrometers
     block_size: 128
   projector_dim: 16
@@ -60,11 +60,11 @@ data:
   datasets:
     unlabeled:
       slides_path: ${project_path}/train_final.parquet
-      # Samples of 4 views, about 560k tokens. With every block checkpointed, a
-      # step peaks at about 52 GB, 57 GB for the largest batches.
-      batch_size: 64
-      # A worker builds a batch in about 15 s, and each prefetched batch takes
-      # about 255 MB of host shared memory.
+      # Samples of 4 views, about 104k tokens. Without checkpointing, a step peaks
+      # at about 54 GiB, 65 GiB for the largest batches. With checkpoint_every: 1,
+      # about 64 samples fit.
+      batch_size: 12
+      # A worker builds a batch in about 3 s.
       num_workers: 16
       dataset:
         _target_: nfm.data.datasets.NucleiDataset
