@@ -31,10 +31,14 @@ model:
   backbone:
     in_features: 64 # rays, or 4 * order for efd
     mlp_embed: true
-    dim: 384
-    depth: 12
-    num_heads: 6
-    hidden_dim: 1024
+    dim: 768 # about 100M parameters
+    depth: 14
+    num_heads: 12
+    hidden_dim: 2048
+    # Every n-th block keeps only its input for the backward pass: 1 needs about
+    # 95 KB of activations per token and 27 % more time, 2 about 295 KB and 13 %,
+    # 0 (none) 527 KB. See train/gpu_memory_peak for what a batch needs.
+    checkpoint_every: 1
     rope_theta: 100.0 # positions are in micrometers
     block_size: 128
   projector_dim: 16

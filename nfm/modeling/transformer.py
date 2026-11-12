@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
+from torch.utils.checkpoint import checkpoint
 
 from nfm.modeling.block_mask import neighborhood_mask
 from nfm.modeling.rove import RoVE
@@ -49,12 +50,22 @@ class FeedForward(nn.Module):
 
 
 class Block(nn.Module):
-    """Pre- and post-norm residual block, as in Gemma."""
+    """Pre- and post-norm residual block, as in Gemma.
+
+    With `checkpointed`, only the input is kept for the backward pass, and the
+    block runs again to recompute the rest.
+    """
 
     def __init__(
-        self, dim: int, num_heads: int, hidden_dim: int, rope_theta: float
+        self,
+        dim: int,
+        num_heads: int,
+        hidden_dim: int,
+        rope_theta: float,
+        checkpointed: bool = False,
     ) -> None:
         super().__init__()
+        self.checkpointed = checkpointed
         self.attn = SelfAttention(dim, num_heads, rope_theta)
         self.ffn = FeedForward(dim, hidden_dim)
         self.pre_attn_norm = nn.RMSNorm(dim)
@@ -63,6 +74,13 @@ class Block(nn.Module):
         self.post_ffn_norm = nn.RMSNorm(dim)
 
     def forward(self, x: Tensor, positions: Tensor, block_mask: BlockMask) -> Tensor:
+        if self.checkpointed and torch.is_grad_enabled():
+            return checkpoint(
+                self.residual, x, positions, block_mask, use_reentrant=False
+            )
+        return self.residual(x, positions, block_mask)
+
+    def residual(self, x: Tensor, positions: Tensor, block_mask: BlockMask) -> Tensor:
         x = x + self.post_attn_norm(
             self.attn(self.pre_attn_norm(x), positions, block_mask)
         )
@@ -86,8 +104,25 @@ class NucleiTransformer(nn.Module):
         rope_theta: float = 100.0,
         block_size: int = 128,
         mlp_embed: bool = True,
+        checkpoint_every: int = 0,
         compile: bool = True,
     ) -> None:
+        """Initializes the transformer.
+
+        Args:
+            in_features: Shape features per nucleus.
+            dim: Token dimension.
+            depth: Number of blocks.
+            num_heads: Attention heads per block.
+            hidden_dim: Hidden dimension of the GeGLU feed-forward.
+            rope_theta: Base of the RoVE frequencies, positions are in micrometers.
+            block_size: Block size of the flex attention kernel.
+            mlp_embed: Embeds the shape features with an MLP, else linearly.
+            checkpoint_every: Activation checkpointing of every n-th block, which
+                then keeps only its input for the backward pass. 1 checkpoints all
+                blocks, 0 none.
+            compile: Compiles the blocks.
+        """
         super().__init__()
         self.block_size = block_size
         # Shape features scale with the nucleus size, which has to stay visible.
@@ -99,7 +134,14 @@ class NucleiTransformer(nn.Module):
         )
         self.cls_token = nn.Parameter(torch.randn(dim) * 0.02)
         self.blocks = nn.ModuleList(
-            Block(dim, num_heads, hidden_dim, rope_theta) for _ in range(depth)
+            Block(
+                dim,
+                num_heads,
+                hidden_dim,
+                rope_theta,
+                checkpointed=checkpoint_every > 0 and i % checkpoint_every == 0,
+            )
+            for i in range(depth)
         )
         self.norm = nn.RMSNorm(dim)
         if compile:

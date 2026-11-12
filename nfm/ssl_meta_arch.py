@@ -83,6 +83,11 @@ class SSLMetaArch(LightningModule):
         )
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
+        if torch.cuda.is_available():
+            # The peak of the previous step, including its backward pass.
+            peak = torch.cuda.max_memory_allocated() / 2**30
+            self.log("train/gpu_memory_peak", peak, batch_size=1)
+            torch.cuda.reset_peak_memory_stats()
         views = batch["unlabeled"]
         cls, _ = self(views)
         # Class tokens of different views that cover the same nuclei are paired,
