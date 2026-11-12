@@ -45,29 +45,31 @@ def neighborhood_mask(
     documents = torch.full((padded,), -1, dtype=torch.long, device=device)
     documents[:nuclei] = torch.repeat_interleave(views, lengths)
     documents[nuclei:tokens] = torch.repeat_interleave(views, cls_lengths)
-    is_cls = torch.zeros(padded, dtype=torch.bool, device=device)
-    is_cls[nuclei:tokens] = True
-    cls_index = torch.zeros(padded, dtype=torch.long, device=device)
-    cls_index[nuclei:tokens] = torch.arange(classes, device=device)
+    # Class tokens come after the nuclei, so a tensor of the count tells them
+    # apart without a lookup, and keeps the mask the same for every batch.
+    first_cls = torch.tensor(nuclei, device=device)
 
     # Blocks of nuclei reached by each nucleus block and by each class token.
     nuclei_blocks = torch.zeros(blocks, blocks, dtype=torch.bool, device=device)
     rows = (torch.arange(nuclei, device=device) // block_size)[:, None]
     nuclei_blocks[rows.expand_as(neighbors), neighbors // block_size] = True
-    cls_blocks = torch.zeros(max(classes, 1), blocks, dtype=torch.bool, device=device)
+    # A row for every position after the nuclei, padding included.
+    rows = max(padded - nuclei, 1)
+    cls_blocks = torch.zeros(rows, blocks, dtype=torch.bool, device=device)
     rows = torch.arange(classes, device=device)[:, None]
     cls_blocks[rows.expand_as(cls_neighbors), cls_neighbors // block_size] = True
 
+    # Evaluated for every pair of a partial block, so it uses few lookups: one
+    # for the coverage of a class token, in either direction, one for nuclei.
     def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
         q_block, kv_block = q // block_size, kv // block_size
+        q_cls, kv_cls = q >= first_cls, kv >= first_cls
+        token = (torch.where(q_cls, q, kv) - first_cls).clamp(min=0)
+        covered = cls_blocks[token, torch.where(q_cls, kv_block, q_block)]
         allowed = torch.where(
-            is_cls[q],
-            torch.where(is_cls[kv], q == kv, cls_blocks[cls_index[q], kv_block]),
-            torch.where(
-                is_cls[kv],
-                cls_blocks[cls_index[kv], q_block],
-                nuclei_blocks[q_block, kv_block],
-            ),
+            q_cls == kv_cls,
+            torch.where(q_cls, q == kv, nuclei_blocks[q_block, kv_block]),
+            covered,
         )
         return (documents[q] == documents[kv]) & allowed
 
@@ -85,7 +87,8 @@ def neighborhood_mask(
     reached &= (lowest[None] <= highest[:, None]) & (highest[None] >= lowest[:, None])
 
     # Full blocks: nuclei of a single view on both sides, all pairs allowed.
-    pure = (lowest == highest) & valid.all(1) & ~is_cls.view(blocks, block_size).any(1)
+    has_cls = torch.arange(blocks, device=device) >= nuclei // block_size
+    pure = (lowest == highest) & valid.all(1) & ~has_cls
     full = (
         nuclei_blocks & pure[:, None] & pure[None] & (lowest[:, None] == lowest[None])
     )

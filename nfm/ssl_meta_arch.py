@@ -138,6 +138,7 @@ class SSLMetaArch(LightningModule):
         give 1. The effective rank is the exponential of the entropy of the
         normalized singular values of the centered embeddings.
         """
+        embeddings = embeddings[:4096]  # plenty for the spread, and much cheaper
         normalized = F.normalize(embeddings, dim=1) * embeddings.size(1) ** 0.5
         singular = torch.linalg.svdvals(embeddings - embeddings.mean(0))
         p = singular / singular.sum()
