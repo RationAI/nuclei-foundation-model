@@ -24,7 +24,7 @@ trainer:
       # last, unless the metric improves. Without a monitor the MLflow logger
       # deletes all but the newest one.
       save_top_k: -1
-      save_last: true
+      save_last: false
       monitor: validation/region/probe_loss
       mode: min
 
