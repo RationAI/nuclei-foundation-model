@@ -47,7 +47,7 @@ class DataModule(LightningDataModule):
     def prepare_data(self) -> None:
         for dataset in self.datasets.values():
             if dataset.slides_path.startswith("mlflow-artifacts:"):
-                dataset.slides_path = download_artifacts(dataset.slides_path)
+                dataset.slides_path = download_artifacts(dataset.slides_path, tracking_uri="https://mlflow.rationai.cloud.e-infra.cz")
 
     def setup(self, stage: str) -> None:
         labeled = self.datasets.labeled
