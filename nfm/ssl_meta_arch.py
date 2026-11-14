@@ -47,7 +47,6 @@ class SSLMetaArch(LightningModule):
         warmup_steps: int = 1000,
     ) -> None:
         super().__init__()
-        self.save_hyperparameters()
         self.lamb = lamb
         self.lr = lr
         self.probe_lr = probe_lr
@@ -61,8 +60,13 @@ class SSLMetaArch(LightningModule):
             dim, [2048, 2048, projector_dim], norm_layer=nn.BatchNorm1d
         )
         self.sigreg = SlicingUnivariateTest(EppsPulley(n_points=17), num_slices=256)
-        self.region_probe = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
-        self.nucleus_probe = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 1))
+        # The nucleus tokens are RMS normed by the backbone. The SimPool cells are
+        # a generalized mean of shifted tokens, positive and not normalized, so
+        # the region probe standardizes them.
+        self.region_probe = nn.Sequential(
+            nn.LayerNorm(dim, elementwise_affine=False), nn.Linear(dim, 1)
+        )
+        self.nucleus_probe = nn.Linear(dim, 1)
         self.region_metrics = _metrics("validation/region/")
         self.nucleus_metrics = _metrics("validation/nucleus/")
 
@@ -86,11 +90,6 @@ class SSLMetaArch(LightningModule):
         self.pooling.train(not mode)
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
-        if torch.cuda.is_available():
-            # The peak of the previous step, including its backward pass.
-            peak = torch.cuda.max_memory_allocated() / 2**30
-            self.log("train/gpu_memory_peak", peak, batch_size=1)
-            torch.cuda.reset_peak_memory_stats()
         views = batch["unlabeled"]
         regions, _ = self(views)
         # Cells of different views that hold the same nuclei are paired, and each

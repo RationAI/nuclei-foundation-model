@@ -24,6 +24,8 @@ trainer:
       # last, unless the metric improves. Without a monitor the MLflow logger
       # deletes all but the newest one.
       save_top_k: -1
+      # The MLflow logger uploads after each save and always re-uploads last, so
+      # last would add two uploads of a copy of the newest checkpoint.
       save_last: false
       monitor: validation/region/probe_loss
       mode: min
@@ -38,7 +40,7 @@ model:
     hidden_dim: 2048
     # Every n-th block keeps only its input for the backward pass: 0 (none) needs
     # about 527 KB of activations per token, 1 about 95 KB for 27 % more time and
-    # 2 about 295 KB for 13 %. See train/gpu_memory_peak for what a batch needs.
+    # 2 about 295 KB for 13 %.
     checkpoint_every: 0
     rope_theta: 100.0 # positions are in micrometers
     block_size: 128
