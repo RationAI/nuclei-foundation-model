@@ -133,6 +133,21 @@ class ShapeNoise:
         return {"polygons": polygons.astype(np.float32), **other}
 
 
+class Jitter:
+    """Moves each nucleus by an independent Gaussian offset of `std` micrometers.
+
+    Shapes are kept, but the distances between nuclei change, so views sharing
+    nuclei cannot be matched by their exact layout.
+    """
+
+    def __init__(self, std: float = 1.0) -> None:
+        self.std = std
+
+    def __call__(self, polygons: NDArray[np.float32], **other: NDArray[Any]) -> Nuclei:
+        offsets = np.random.normal(0, self.std, (len(polygons), 1, 2))
+        return {"polygons": (polygons + offsets).astype(np.float32), **other}
+
+
 class Drop:
     """Removes each nucleus with probability `p`, along with its other arrays."""
 

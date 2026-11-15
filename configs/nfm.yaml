@@ -13,6 +13,8 @@ trainer:
   max_steps: 20000
   max_epochs: -1
   precision: bf16-mixed
+  # LeJEPA runs without clipping can collapse abruptly (arXiv:2610.39302, Fig. 7).
+  gradient_clip_val: 1.0
   log_every_n_steps: 10
   val_check_interval: 1000
   check_val_every_n_epoch: null
