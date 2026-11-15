@@ -1,6 +1,7 @@
 """How easily paired cells can be matched without learning anything.
 
-The nuclei of each paired cell get a fingerprint: quantiles of
+Each cell of a track is paired with the cell of its track in the first global
+view. The nuclei of each paired cell get a fingerprint: quantiles of
 rotation and flip invariant nucleus statistics, the log mean radius and the
 relative Fourier magnitudes of the radial distances (elongation and finer
 shape). The score is the share of pairs whose first cell has its partner
@@ -60,21 +61,31 @@ def main(overrides: list[str]) -> None:
         view = sample["views"][view]
         return fingerprint(view["features"][view["cells"] == cell])
 
+    def pairs(sample: dict) -> list[tuple[int, int, int, int]]:
+        anchors = sample["tracks"][0]
+        cells = {track: cell for cell, track in enumerate(anchors) if track >= 0}
+        return [
+            (0, cells[track], view, cell)
+            for view, tracks in enumerate(sample["tracks"][1:], start=1)
+            for cell, track in enumerate(tracks)
+            if track >= 0
+        ]
+
     prints = np.array(
         [
             [covered(s, a, i), covered(s, b, j)]
             for s in samples
-            for a, i, b, j in s["pairs"]
+            for a, i, b, j in pairs(s)
         ]
     )
     flat = prints.reshape(-1, prints.shape[-1])
     prints = (prints - flat.mean(0)) / (flat.std(0) + 1e-6)
     distances = np.linalg.norm(prints[:, 0, None] - prints[None, :, 1], axis=-1)
-    pairs = len(prints)
-    accuracy = np.mean(distances.argmin(1) == np.arange(pairs))
+    count = len(prints)
+    accuracy = np.mean(distances.argmin(1) == np.arange(count))
     print(
-        f"top-1 cell retrieval among {pairs} pairs: {accuracy:.1%} "
-        f"(chance {1 / pairs:.2%})"
+        f"top-1 cell retrieval among {count} pairs: {accuracy:.1%} "
+        f"(chance {1 / count:.2%})"
     )
 
 

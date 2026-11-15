@@ -64,20 +64,22 @@ data:
   datasets:
     unlabeled:
       slides_path: ${project_path}/train_final.parquet
-      # Samples of 4 views, about 104k tokens. Without checkpointing, a step peaks
-      # at about 54 GiB, 65 GiB for the largest batches. With checkpoint_every: 1,
-      # about 64 samples fit.
-      batch_size: 16
+      # Samples of 2 global and 6 local views, about 9.6k tokens after drop and
+      # holes, 135k per batch, as many as 16 samples of the former 4 views.
+      batch_size: 14
       # A worker builds a batch in about 3 s.
       num_workers: 16
       dataset:
         _target_: nfm.data.datasets.NucleiDataset
         nuclei_path: ${project_path}/cells
-        views: 4
-        view_nuclei: [1024, 4096]
-        center_nuclei: 1024 # view centers among the nuclei closest to the seed
+        global_views: 2
+        global_nuclei: [3072, 4096]
+        local_views: 6
+        local_nuclei: [512, 1024]
+        center_nuclei: 1024 # global view centers among the nuclei closest to the seed
         region_nuclei: 8192
-        min_overlap: 0.3 # Jaccard index of the nuclei of paired cells
+        min_overlap: 0.3 # Jaccard index of the global cells of a track
+        min_share: 0.5 # of the nuclei of a local cell, in the global cells of its track
         neighborhoods: ${neighborhoods}
         descriptor: ${descriptor}
     labeled:

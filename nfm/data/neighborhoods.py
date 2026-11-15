@@ -1,6 +1,5 @@
 """Spatial neighborhoods of nuclei and their Voronoi cells."""
 
-from itertools import combinations
 from typing import Any
 
 import numpy as np
@@ -64,34 +63,59 @@ class Neighborhoods:
         }
 
 
-def match_cells(views: list[View], min_overlap: float) -> NDArray[Any]:
-    """Pairs of cells in different views that hold the same nuclei.
+def _members(view: View, size: int) -> NDArray[np.float32]:
+    """Membership of the nucleus ids in the cells of a view, [cells, size]."""
+    members = np.zeros((len(view["cell_seeds"]), size), dtype=np.float32)
+    members[view["cells"], view["ids"]] = 1
+    return members
 
-    Two cells are paired when each is the other's best match by the Jaccard
-    index of their nucleus ids, and that index is at least `min_overlap`.
+
+def match_tracks(
+    views: list[View], global_views: int, min_overlap: float, min_share: float
+) -> list[NDArray[Any]]:
+    """Tracks of cells that hold the same nuclei in different views.
+
+    A track starts from a cell of the first global view that is the mutual best
+    match, by the Jaccard index of their nucleus ids, of a cell in every other
+    global view, with an index of at least `min_overlap`. A cell of a local view
+    joins the track whose global cells hold the largest share of its nuclei, if
+    that share is at least `min_share`. Local cells are small and often cut by
+    the view border, so their Jaccard index with a whole track is low even when
+    they lie inside it.
 
     Returns:
-        Rows of (view, cell, other view, other cell), [pairs, 4].
+        For each view, the track of each of its cells, or -1, [cells].
     """
-    size = max(int(v["ids"].max(initial=0)) for v in views) + 1
-    members = []
-    for view in views:
-        member = np.zeros((len(view["cell_seeds"]), size), dtype=np.float32)
-        member[view["cells"], view["ids"]] = 1
-        members.append(member)
-    pairs = [np.zeros((0, 4), dtype=np.int64)]
-    for a, b in combinations(range(len(views)), 2):
-        if len(members[a]) == 0 or len(members[b]) == 0:
+    size = max(int(v["ids"].max(initial=-1)) for v in views) + 1
+    members = [_members(view, size) for view in views[:global_views]]
+    anchor = members[0]
+    keep = np.ones(len(anchor), dtype=bool)
+    partners = []
+    for other in members[1:]:
+        if len(other) == 0:
+            keep[:] = False
+            partners.append(np.zeros(len(anchor), dtype=np.int64))
             continue
-        shared = members[a] @ members[b].T
-        union = members[a].sum(1)[:, None] + members[b].sum(1)[None] - shared
+        shared = anchor @ other.T
+        union = anchor.sum(1)[:, None] + other.sum(1)[None] - shared
         jaccard = shared / np.maximum(union, 1)
-        best_b, best_a = jaccard.argmax(1), jaccard.argmax(0)
-        i = np.flatnonzero(
-            (best_a[best_b] == np.arange(len(best_b)))
-            & (jaccard[np.arange(len(best_b)), best_b] >= min_overlap)
-        )
-        pairs.append(
-            np.stack([np.full_like(i, a), i, np.full_like(i, b), best_b[i]], axis=1)
-        )
-    return np.concatenate(pairs)
+        best, best_back = jaccard.argmax(1), jaccard.argmax(0)
+        keep &= best_back[best] == np.arange(len(anchor))
+        keep &= jaccard[np.arange(len(anchor)), best] >= min_overlap
+        partners.append(best)
+    starts = np.flatnonzero(keep)
+    tracks = [np.full(len(view["cell_seeds"]), -1, dtype=np.int64) for view in views]
+    tracks[0][starts] = np.arange(len(starts))
+    nuclei = anchor[starts]
+    for v, best in enumerate(partners, start=1):
+        tracks[v][best[starts]] = np.arange(len(starts))
+        nuclei = np.maximum(nuclei, members[v][best[starts]])
+    if len(starts) == 0:
+        return tracks
+    for v in range(global_views, len(views)):
+        local = _members(views[v], size)
+        share = (local @ nuclei.T) / np.maximum(local.sum(1)[:, None], 1)
+        best = share.argmax(1)
+        joined = share[np.arange(len(local)), best] >= min_share
+        tracks[v][joined] = best[joined]
+    return tracks

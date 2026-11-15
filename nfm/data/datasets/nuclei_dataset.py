@@ -7,10 +7,11 @@ from pyarrow import FixedSizeListArray
 from scipy.spatial import cKDTree
 from torch.utils.data import Dataset
 
-from nfm.data.neighborhoods import Neighborhoods, match_cells
+from nfm.data.neighborhoods import Neighborhoods, match_tracks
 from nfm.data.nuclei import (
     Augmentation,
     Descriptor,
+    View,
     make_view,
     radial_distances,
     radial_polygons,
@@ -23,12 +24,13 @@ def _to_numpy(column: FixedSizeListArray) -> NDArray[np.float32]:
 
 
 class NucleiDataset(Dataset[dict[str, Any]]):
-    """Overlapping views of the nuclei around a random nucleus.
+    """Global and local views of the nuclei around a random nucleus, as in LeJEPA.
 
     Each view is the nuclei closest to its own center, a random number of them,
-    like a random crop of a variable share of the region. Centers are drawn among
-    the nuclei closest to the region seed, so the views overlap. Voronoi cells of
-    different views that hold the same nuclei are paired for the objective.
+    like a random crop. The centers of the global views are among the nuclei
+    closest to the region seed, so the global views overlap, and the centers of
+    the local views are among the nuclei of the global views. Voronoi cells that
+    hold the same nuclei in different views form tracks for the objective.
     """
 
     def __init__(
@@ -37,11 +39,14 @@ class NucleiDataset(Dataset[dict[str, Any]]):
         nuclei_path: str,
         augmentation: Augmentation,
         neighborhoods: Neighborhoods,
-        views: int = 4,
-        view_nuclei: tuple[int, int] = (1024, 4096),
+        global_views: int = 2,
+        global_nuclei: tuple[int, int] = (3072, 4096),
+        local_views: int = 6,
+        local_nuclei: tuple[int, int] = (512, 1024),
         center_nuclei: int = 1024,
         region_nuclei: int = 8192,
         min_overlap: float = 0.3,
+        min_share: float = 0.5,
         descriptor: Descriptor = radial_distances,
     ) -> None:
         """Initializes the dataset.
@@ -51,24 +56,32 @@ class NucleiDataset(Dataset[dict[str, Any]]):
             nuclei_path: Root of the lance nuclei store.
             augmentation: Applied to each view.
             neighborhoods: Adds the nucleus neighbors and Voronoi cells to a view.
-            views: Number of views.
-            view_nuclei: Range of the number of nuclei in a view.
-            center_nuclei: View centers are among this many nuclei closest to the
-                seed, which sets how far apart the views are.
+            global_views: Number of global views, whose cells start the tracks.
+            global_nuclei: Range of the number of nuclei in a global view.
+            local_views: Number of local views, whose cells join the tracks.
+            local_nuclei: Range of the number of nuclei in a local view.
+            center_nuclei: Global view centers are among this many nuclei
+                closest to the seed, which sets how far apart they are.
             region_nuclei: Nuclei loaded around the seed. A view is cut short
                 where it reaches beyond them.
-            min_overlap: Least Jaccard index of the nuclei of two paired cells.
+            min_overlap: Least Jaccard index of the nuclei of the cells of a
+                track in the global views.
+            min_share: Least share of the nuclei of a local cell that lie in the
+                global cells of its track.
             descriptor: Shape features of a contour in the view frame.
         """
         self.slides = slides.reset_index(drop=True)
         self.nuclei_path = nuclei_path
         self.augmentation = augmentation
         self.neighborhoods = neighborhoods
-        self.views = views
-        self.view_nuclei = view_nuclei
+        self.global_views = global_views
+        self.global_nuclei = global_nuclei
+        self.local_views = local_views
+        self.local_nuclei = local_nuclei
         self.center_nuclei = center_nuclei
         self.region_nuclei = region_nuclei
         self.min_overlap = min_overlap
+        self.min_share = min_share
         self.descriptor = descriptor
 
     def __len__(self) -> int:
@@ -106,20 +119,36 @@ class NucleiDataset(Dataset[dict[str, Any]]):
         polygons, seed = self.load_region(self.slides.iloc[idx])
         centroids = polygons.mean(1)
         tree = cKDTree(centroids)
-        _, near_seed = tree.query(seed, min(self.center_nuclei, len(centroids)))
         ids = np.arange(len(polygons))
-        views = []
-        for _ in range(self.views):
-            center = centroids[np.random.choice(np.atleast_1d(near_seed))]
-            count = np.random.randint(self.view_nuclei[0], self.view_nuclei[1] + 1)
+
+        def view(center: NDArray[np.float32], sizes: tuple[int, int]) -> View:
+            count = np.random.randint(sizes[0], sizes[1] + 1)
             _, nuclei = tree.query(center, min(count, len(centroids)))
             nuclei = np.atleast_1d(nuclei)
-            view = make_view(
-                polygons[nuclei],
-                center,
-                self.augmentation,
-                self.descriptor,
-                ids=ids[nuclei],
+            return self.neighborhoods(
+                make_view(
+                    polygons[nuclei],
+                    center,
+                    self.augmentation,
+                    self.descriptor,
+                    ids=ids[nuclei],
+                )
             )
-            views.append(self.neighborhoods(view))
-        return {"views": views, "pairs": match_cells(views, self.min_overlap)}
+
+        _, near_seed = tree.query(seed, min(self.center_nuclei, len(centroids)))
+        near_seed = np.atleast_1d(near_seed)
+        views = [
+            view(centroids[np.random.choice(near_seed)], self.global_nuclei)
+            for _ in range(self.global_views)
+        ]
+        covered = np.unique(np.concatenate([v["ids"] for v in views]))
+        if len(covered) == 0:  # everything dropped
+            covered = near_seed
+        views += [
+            view(centroids[np.random.choice(covered)], self.local_nuclei)
+            for _ in range(self.local_views)
+        ]
+        tracks = match_tracks(
+            views, self.global_views, self.min_overlap, self.min_share
+        )
+        return {"views": views, "tracks": tracks, "global_views": self.global_views}

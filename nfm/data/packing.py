@@ -85,29 +85,30 @@ def pack(views: list[View], block_size: int) -> Batch:
 
 
 def collate_views(batch: list[dict[str, Any]], block_size: int) -> Batch:
-    """Packs the views of all samples, with the paired cells.
+    """Packs the views of all samples, with the tracks of their cells.
 
     Returns:
-        The packed views, sample by sample, and `pairs`, the indices of the
-        paired cells, [2, pairs].
+        The packed views, sample by sample, and for each cell: `tracks`, its
+        track numbered across the samples or -1, and `slots`, the index of its
+        view within its sample, global views first. `global_views` is the number
+        of global views per sample, and `views_per_sample` of all views.
     """
     views = [view for sample in batch for view in sample["views"]]
     packed = pack(views, block_size)
-    lengths = packed["cell_lengths"].numpy()
-    starts = np.cumsum(lengths) - lengths
-    per_sample = len(batch[0]["views"])
-    pairs = [
-        np.stack(
-            [
-                starts[b * per_sample + rows[:, 0]] + rows[:, 1],
-                starts[b * per_sample + rows[:, 2]] + rows[:, 3],
-            ]
-        )
-        for b, rows in enumerate(sample["pairs"] for sample in batch)
-    ]
+    tracks, slots, offset = [], [], 0
+    for sample in batch:
+        count = max((int(t.max(initial=-1)) for t in sample["tracks"]), default=-1)
+        for slot, cell_tracks in enumerate(sample["tracks"]):
+            tracks.append(np.where(cell_tracks >= 0, cell_tracks + offset, -1))
+            slots.append(np.full(len(cell_tracks), slot))
+        offset += count + 1
     return {
         **packed,
-        "pairs": torch.from_numpy(np.concatenate(pairs, axis=1)).long(),
+        "tracks": torch.from_numpy(np.concatenate(tracks)).long(),
+        "slots": torch.from_numpy(np.concatenate(slots)).long(),
+        "track_count": offset,
+        "global_views": batch[0]["global_views"],
+        "views_per_sample": len(batch[0]["views"]),
         "batch_size": len(batch),
     }
 

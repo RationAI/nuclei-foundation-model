@@ -2,10 +2,10 @@
 
 [LeJEPA](https://github.com/galilai-group/lejepa) self-supervised training directly on nuclei. Each nucleus is a token: its contour as distances from the centroid at 64 fixed angles (or elliptic Fourier descriptors), embedded by an MLP, and its centroid as a position in micrometers encoded with RoVE. Views of thousands of nuclei are encoded with neighborhood attention, and the nucleus tokens are pooled into embeddings of Voronoi cells of the tissue.
 
-- **Views**: the 1024-4096 nuclei closest to a center near a shared seed, so views overlap. Augmented on the polygons: rotation, flips and zoom of the view, nucleus drop, dropout holes, and for each nucleus an affine map and shape noise.
+- **Views**: as in LeJEPA, 2 global views of the 3072-4096 nuclei closest to a center near a shared seed, so they overlap, and 6 local views of 512-1024 nuclei centered among the nuclei of the global views. Augmented on the polygons: rotation, flips and zoom of the view, nucleus drop, dropout holes, and for each nucleus an affine map and shape noise.
 - **Attention**: within a view, a nucleus attends to the blocks of 128 spatially sorted nuclei that hold its nearest neighbors. Block pairs within a view are full blocks of flex attention.
 - **Cells**: seeds placed by farthest point sampling, one per 64 nuclei, and each nucleus belongs to the cell of its nearest seed. The final nucleus tokens of a cell are pooled with SimPool, or with two cross-attention layers (`pooling=attention`).
-- **Objective**: LeJEPA on pairs of cells from different views that hold the same nuclei, by a Jaccard index of at least 0.3.
+- **Objective**: LeJEPA on tracks of cells that hold the same nuclei. Cells of the two global views that are each other's best match, by a Jaccard index of at least 0.3, start a track, and a local cell joins the track whose global cells hold at least half of its nuclei. Each cell of a track predicts the mean of its global cells, and SIGReg is applied to the cells of each view slot.
 - **Probes**: online, detached probes on PANDA Radboud, one on the cell embeddings (a region is positive if at least 50 % of its nuclei are) and one on each nucleus token. Validation encodes every validation slide whole and reports AUROC, AUPRC, precision and recall for both.
 
 ```bash
@@ -20,7 +20,7 @@ uv run python scripts/view_retrieval.py augmentation=weak
 | Module | Role |
 | --- | --- |
 | `nfm/data/nuclei.py` | Contours, shape features, views |
-| `nfm/data/neighborhoods.py` | Nearest neighbors, Voronoi cells, cell pairs |
+| `nfm/data/neighborhoods.py` | Nearest neighbors, Voronoi cells, cell tracks |
 | `nfm/data/augmentations.py` | Polygon augmentations |
 | `nfm/data/packing.py` | Spatial sorting and packing of views into one sequence |
 | `nfm/modeling/block_mask.py` | Neighborhood attention mask |

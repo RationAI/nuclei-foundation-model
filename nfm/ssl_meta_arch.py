@@ -19,6 +19,7 @@ from torchmetrics.classification import (
 from torchvision.ops import MLP
 
 from nfm.modeling.pooling import pooling as make_pooling
+from nfm.modeling.pooling import segment_sum
 from nfm.modeling.transformer import NucleiTransformer
 
 
@@ -92,14 +93,26 @@ class SSLMetaArch(LightningModule):
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         views = batch["unlabeled"]
         regions, _ = self(views)
-        # Cells of different views that hold the same nuclei are paired, and each
-        # predicts the center of its pair.
-        first, second = views["pairs"]
-        embeddings = torch.cat([regions[first], regions[second]])
-        proj = self.projector(embeddings).unflatten(0, (2, -1))  # [2, pairs, dim]
-        invariance = (proj.mean(0) - proj).square().mean()
+        proj = self.projector(regions)
+        # Cells that hold the same nuclei in different views form a track, and
+        # each cell of a track predicts the mean of its cells in the global views.
+        tracks, slots = views["tracks"], views["slots"]
+        tracked = tracks >= 0
+        track, z = tracks[tracked], proj[tracked]
+        is_global = slots[tracked] < views["global_views"]
+        count = views["track_count"]
+        sums = segment_sum(z[is_global], track[is_global], count)
+        copies = torch.bincount(track[is_global], minlength=count).clamp_min(1)
+        centers = sums / copies[:, None].to(sums.dtype)
+        invariance = (centers[track] - z).square().mean()
+        # Each view slot is a sample of the embedding distribution.
         with torch.autocast(self.device.type, enabled=False):
-            sigreg = self.sigreg(proj.float())
+            sigreg = torch.stack(
+                [
+                    self.sigreg(proj[slots == slot].float())
+                    for slot in range(views["views_per_sample"])
+                ]
+            ).mean()
         lejepa = self.lamb * sigreg + (1 - self.lamb) * invariance
 
         # Labels must not reach the encoder, nor its batch norm statistics.
@@ -122,10 +135,11 @@ class SSLMetaArch(LightningModule):
                 "train/sigreg_loss": sigreg,
                 "train/tokens": float(len(views["features"])),
                 "train/cells": float(len(regions)),
-                "train/pairs": float(first.numel()),
+                "train/tracks": float(count),
+                "train/tracked_cells": float(len(track)),
                 "train/region_probe_loss": region_probe,
                 "train/nucleus_probe_loss": nucleus_probe,
-                **self.embedding_statistics(embeddings.detach().float()),
+                **self.embedding_statistics(regions[tracked].detach().float()),
             },
             batch_size=views["batch_size"],
             prog_bar=True,
@@ -134,7 +148,7 @@ class SSLMetaArch(LightningModule):
 
     @staticmethod
     def embedding_statistics(embeddings: Tensor) -> dict[str, Tensor]:
-        """Spread of the paired cell embeddings, comparable across encoders.
+        """Spread of the tracked cell embeddings, comparable across encoders.
 
         The std is of the L2-normalized embeddings, scaled so that isotropic ones
         give 1. The effective rank is the exponential of the entropy of the
