@@ -1,4 +1,4 @@
-"""LeJEPA on pooled Voronoi cells of nuclei, with detached region and nucleus probes."""
+"""LeJEPA on cells clustered from the nucleus tokens, with detached probes."""
 
 import math
 from typing import Any
@@ -18,8 +18,8 @@ from torchmetrics.classification import (
 )
 from torchvision.ops import MLP
 
+from nfm.modeling.clustering import Clustering, match_tracks, segment_mean
 from nfm.modeling.pooling import pooling as make_pooling
-from nfm.modeling.pooling import segment_sum
 from nfm.modeling.transformer import NucleiTransformer
 
 
@@ -46,15 +46,47 @@ class SSLMetaArch(LightningModule):
         probe_lr: float = 1e-3,
         weight_decay: float = 0.05,
         warmup_steps: int = 1000,
+        clustering: dict[str, Any] | None = None,
+        cluster_mix: float = 0.5,
+        cluster_schedule: tuple[float, float] = (0.1, 0.3),
+        min_overlap: float = 0.3,
+        min_share: float = 0.5,
     ) -> None:
+        """Initializes the model.
+
+        Args:
+            backbone: Arguments of the nucleus transformer.
+            pooling: Arguments of the pooling of the cells.
+            projector_dim: Output dimension of the LeJEPA projector.
+            lamb: Weight of SIGReg against the invariance.
+            lr: Peak learning rate of the encoder.
+            probe_lr: Learning rate of the probes.
+            weight_decay: Weight decay of the encoder.
+            warmup_steps: Linear warmup of the learning rate.
+            clustering: Arguments of the clustering of the cells.
+            cluster_mix: Share of the tokens against the positions in the
+                distances of the clustering of the cells, from 0 to 1.
+            cluster_schedule: Shares of the training at which the mix starts
+                to rise linearly from 0, while the tokens are still near random,
+                and reaches `cluster_mix`.
+            min_overlap: Least Jaccard index of the nuclei of the global cells
+                of a track.
+            min_share: Least share of the nuclei of a local cell that lie in the
+                global cells of its track.
+        """
         super().__init__()
         self.lamb = lamb
         self.lr = lr
         self.probe_lr = probe_lr
         self.weight_decay = weight_decay
         self.warmup_steps = warmup_steps
+        self.cluster_mix = cluster_mix
+        self.cluster_schedule = tuple(cluster_schedule)
+        self.min_overlap = min_overlap
+        self.min_share = min_share
         self.backbone = NucleiTransformer(**backbone)
         dim = self.backbone.norm.normalized_shape[0]
+        self.clustering = Clustering(dim, **(clustering or {}))
         # Part of the encoder: trained by the objective, frozen for the probes.
         self.pooling = make_pooling(dim, **(pooling or {}))
         self.projector = MLP(
@@ -71,18 +103,60 @@ class SSLMetaArch(LightningModule):
         self.region_metrics = _metrics("validation/region/")
         self.nucleus_metrics = _metrics("validation/nucleus/")
 
-    def forward(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
-        """Returns the cell embeddings, [cells, dim], and nucleus tokens."""
+    def current_cluster_mix(self) -> float:
+        """The share of the tokens in the clustering at this step.
+
+        Without a trainer, as when a checkpoint is evaluated, it is the final one.
+        """
+        if self._trainer is None:
+            return self.cluster_mix
+        start, end = self.cluster_schedule
+        total = max(int(self.trainer.estimated_stepping_batches), 1)
+        progress = self.global_step / total
+        if end <= start:
+            return self.cluster_mix if progress >= start else 0.0
+        return self.cluster_mix * min(max((progress - start) / (end - start), 0), 1)
+
+    def encode(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """Nucleus tokens, their cells and the cell embeddings.
+
+        Returns:
+            nuclei: The nucleus tokens, [nuclei, dim].
+            cells: The cell of each nucleus, [nuclei], and `count` cells.
+            regions: The cell embeddings, [count, dim].
+            moved: The share of nuclei that left their initial cell.
+        """
         nuclei = self.backbone(
             batch["features"], batch["positions"], batch["lengths"], batch["neighbors"]
         )
-        return self.pooling(nuclei, batch["cells"], batch["cell_count"]), nuclei
+        cells, count, moved = self.clustering(nuclei, batch, self.current_cluster_mix())
+        regions = self.pooling(nuclei, cells, count)
+        return {
+            "nuclei": nuclei,
+            "cells": cells,
+            "count": count,
+            "regions": regions,
+            "moved": moved,
+        }
 
-    def probe_logits(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
-        regions, nuclei = self(batch)
+    def forward(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor]:
+        """Returns the cell embeddings, [cells, dim], and nucleus tokens."""
+        encoded = self.encode(batch)
+        return encoded["regions"], encoded["nuclei"]
+
+    @staticmethod
+    def cell_labels(encoded: dict[str, Any], labels: Tensor) -> Tensor:
+        """A cell is positive if at least half of its nuclei are."""
+        share = segment_mean(labels[:, None], encoded["cells"], encoded["count"])
+        return (share[:, 0] >= 0.5).float()
+
+    def probe_logits(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor]:
+        """Region and nucleus logits, and the labels of the regions."""
+        encoded = self.encode(batch)
         return (
-            self.region_probe(regions).squeeze(1),
-            self.nucleus_probe(nuclei).squeeze(1),
+            self.region_probe(encoded["regions"]).squeeze(1),
+            self.nucleus_probe(encoded["nuclei"]).squeeze(1),
+            self.cell_labels(encoded, batch["labels"]),
         )
 
     def encoder_eval(self, mode: bool = True) -> None:
@@ -92,18 +166,27 @@ class SSLMetaArch(LightningModule):
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         views = batch["unlabeled"]
-        regions, _ = self(views)
+        encoded = self.encode(views)
+        regions, count = encoded["regions"], encoded["count"]
         proj = self.projector(regions)
         # Cells that hold the same nuclei in different views form a track, and
         # each cell of a track predicts the mean of its cells in the global views.
-        tracks, slots = views["tracks"], views["slots"]
+        if views["global_views"] != 2:
+            raise ValueError("the tracks start from exactly 2 global views")
+        tracks, track_count = match_tracks(
+            encoded["cells"],
+            count,
+            views["keys"],
+            views["slots"],
+            self.min_overlap,
+            self.min_share,
+        )
+        slots = torch.zeros(count, dtype=torch.long, device=self.device)
+        slots[encoded["cells"]] = views["slots"]
         tracked = tracks >= 0
         track, z = tracks[tracked], proj[tracked]
         is_global = slots[tracked] < views["global_views"]
-        count = views["track_count"]
-        sums = segment_sum(z[is_global], track[is_global], count)
-        copies = torch.bincount(track[is_global], minlength=count).clamp_min(1)
-        centers = sums / copies[:, None].to(sums.dtype)
+        centers = segment_mean(z[is_global], track[is_global], track_count)
         invariance = (centers[track] - z).square().mean()
         # Each view slot is a sample of the embedding distribution.
         with torch.autocast(self.device.type, enabled=False):
@@ -119,13 +202,14 @@ class SSLMetaArch(LightningModule):
         labeled = batch["labeled"]
         self.encoder_eval()
         with torch.no_grad():
-            region_features, nucleus_features = self(labeled)
+            probed = self.encode(labeled)
         self.encoder_eval(False)
         region_probe = F.binary_cross_entropy_with_logits(
-            self.region_probe(region_features).squeeze(1), labeled["cell_labels"]
+            self.region_probe(probed["regions"]).squeeze(1),
+            self.cell_labels(probed, labeled["labels"]),
         )
         nucleus_probe = F.binary_cross_entropy_with_logits(
-            self.nucleus_probe(nucleus_features).squeeze(1), labeled["labels"]
+            self.nucleus_probe(probed["nuclei"]).squeeze(1), labeled["labels"]
         )
 
         self.log_dict(
@@ -134,9 +218,11 @@ class SSLMetaArch(LightningModule):
                 "train/invariance_loss": invariance,
                 "train/sigreg_loss": sigreg,
                 "train/tokens": float(len(views["features"])),
-                "train/cells": float(len(regions)),
-                "train/tracks": float(count),
+                "train/cells": float(count),
+                "train/tracks": float(track_count),
                 "train/tracked_cells": float(len(track)),
+                "train/cluster_mix": self.current_cluster_mix(),
+                "train/cluster_moved": encoded["moved"],
                 "train/region_probe_loss": region_probe,
                 "train/nucleus_probe_loss": nucleus_probe,
                 **self.embedding_statistics(regions[tracked].detach().float()),
@@ -164,9 +250,9 @@ class SSLMetaArch(LightningModule):
         }
 
     def validation_step(self, batch: dict[str, Tensor]) -> None:
-        region_logits, nucleus_logits = self.probe_logits(batch)
+        region_logits, nucleus_logits, region_labels = self.probe_logits(batch)
         for name, logits, labels, metrics in (
-            ("region", region_logits, batch["cell_labels"], self.region_metrics),
+            ("region", region_logits, region_labels, self.region_metrics),
             ("nucleus", nucleus_logits, batch["labels"], self.nucleus_metrics),
         ):
             loss = F.binary_cross_entropy_with_logits(logits, labels)

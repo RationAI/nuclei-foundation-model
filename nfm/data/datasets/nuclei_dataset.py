@@ -7,7 +7,7 @@ from pyarrow import FixedSizeListArray
 from scipy.spatial import cKDTree
 from torch.utils.data import Dataset
 
-from nfm.data.neighborhoods import Neighborhoods, match_tracks
+from nfm.data.neighborhoods import Neighborhoods
 from nfm.data.nuclei import (
     Augmentation,
     Descriptor,
@@ -29,8 +29,9 @@ class NucleiDataset(Dataset[dict[str, Any]]):
     Each view is the nuclei closest to its own center, a random number of them,
     like a random crop. The centers of the global views are among the nuclei
     closest to the region seed, so the global views overlap, and the centers of
-    the local views are among the nuclei of the global views. Voronoi cells that
-    hold the same nuclei in different views form tracks for the objective.
+    the local views are among the nuclei of the global views. The model
+    clusters each view into cells and tracks the cells across the views by the
+    ids of their nuclei.
     """
 
     def __init__(
@@ -45,8 +46,6 @@ class NucleiDataset(Dataset[dict[str, Any]]):
         local_nuclei: tuple[int, int] = (512, 1024),
         center_nuclei: int = 1024,
         region_nuclei: int = 8192,
-        min_overlap: float = 0.3,
-        min_share: float = 0.5,
         descriptor: Descriptor = radial_distances,
     ) -> None:
         """Initializes the dataset.
@@ -55,7 +54,7 @@ class NucleiDataset(Dataset[dict[str, Any]]):
             slides: Slides to sample regions from.
             nuclei_path: Root of the lance nuclei store.
             augmentation: Applied to each view.
-            neighborhoods: Adds the nucleus neighbors and Voronoi cells to a view.
+            neighborhoods: Adds the nucleus neighbors and initial cells to a view.
             global_views: Number of global views, whose cells start the tracks.
             global_nuclei: Range of the number of nuclei in a global view.
             local_views: Number of local views, whose cells join the tracks.
@@ -64,10 +63,6 @@ class NucleiDataset(Dataset[dict[str, Any]]):
                 closest to the seed, which sets how far apart they are.
             region_nuclei: Nuclei loaded around the seed. A view is cut short
                 where it reaches beyond them.
-            min_overlap: Least Jaccard index of the nuclei of the cells of a
-                track in the global views.
-            min_share: Least share of the nuclei of a local cell that lie in the
-                global cells of its track.
             descriptor: Shape features of a contour in the view frame.
         """
         self.slides = slides.reset_index(drop=True)
@@ -80,8 +75,6 @@ class NucleiDataset(Dataset[dict[str, Any]]):
         self.local_nuclei = local_nuclei
         self.center_nuclei = center_nuclei
         self.region_nuclei = region_nuclei
-        self.min_overlap = min_overlap
-        self.min_share = min_share
         self.descriptor = descriptor
 
     def __len__(self) -> int:
@@ -148,7 +141,4 @@ class NucleiDataset(Dataset[dict[str, Any]]):
             view(centroids[np.random.choice(covered)], self.local_nuclei)
             for _ in range(self.local_views)
         ]
-        tracks = match_tracks(
-            views, self.global_views, self.min_overlap, self.min_share
-        )
-        return {"views": views, "tracks": tracks, "global_views": self.global_views}
+        return {"views": views, "global_views": self.global_views}

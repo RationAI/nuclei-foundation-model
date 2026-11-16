@@ -48,12 +48,13 @@ def pack(views: list[View], block_size: int) -> Batch:
         positions: Positions of the nuclei in their view frames, [nuclei, 2].
         lengths: Nuclei per view, [views].
         neighbors: Nearest nuclei of each nucleus, [nuclei, neighbors].
-        cells: Cell of each nucleus, numbered across the views, [nuclei].
-        cell_lengths: Cells per view, [views].
-        cell_count: Number of cells.
-        labels, cell_labels: Nucleus and region labels, when the views have them.
+        cells: Initial cell of each nucleus, numbered across the views, [nuclei].
+        cell_lengths: Initial cells per view, [views].
+        cell_count: Number of initial cells.
+        labels, ids: Nucleus labels and ids, when the views have them.
     """
-    features, positions, neighbors, cells, labels = [], [], [], [], []
+    features, positions, neighbors, cells = [], [], [], []
+    extras: dict[str, list] = {"labels": [], "ids": []}
     offset = cell_offset = 0
     for view in views:
         order = spatial_order(view["positions"], offset, block_size)
@@ -63,8 +64,9 @@ def pack(views: list[View], block_size: int) -> Batch:
         positions.append(view["positions"][order])
         neighbors.append(inverse[view["neighbors"][order]] + offset)
         cells.append(view["cells"][order] + cell_offset)
-        if "labels" in view:
-            labels.append(view["labels"][order])
+        for key, values in extras.items():
+            if key in view:
+                values.append(view[key][order])
         offset += len(order)
         cell_offset += len(view["cell_seeds"])
     batch = {
@@ -76,43 +78,41 @@ def pack(views: list[View], block_size: int) -> Batch:
         "cell_lengths": torch.tensor([len(v["cell_seeds"]) for v in views]),
         "cell_count": cell_offset,
     }
-    if labels:
-        batch["labels"] = torch.from_numpy(np.concatenate(labels))
-        batch["cell_labels"] = torch.from_numpy(
-            np.concatenate([v["cell_labels"] for v in views])
-        )
+    for key, values in extras.items():
+        if values:
+            batch[key] = torch.from_numpy(np.concatenate(values))
     return batch
 
 
 def collate_views(batch: list[dict[str, Any]], block_size: int) -> Batch:
-    """Packs the views of all samples, with the tracks of their cells.
+    """Packs the views of all samples.
 
     Returns:
-        The packed views, sample by sample, and for each cell: `tracks`, its
-        track numbered across the samples or -1, and `slots`, the index of its
-        view within its sample, global views first. `global_views` is the number
-        of global views per sample, and `views_per_sample` of all views.
+        The packed views, sample by sample, and for each nucleus: `keys`, its id
+        made unique across the samples, and `slots`, the index of its view within
+        its sample, global views first. `global_views` is the number of global
+        views per sample, and `views_per_sample` of all views.
     """
     views = [view for sample in batch for view in sample["views"]]
     packed = pack(views, block_size)
-    tracks, slots, offset = [], [], 0
-    for sample in batch:
-        count = max((int(t.max(initial=-1)) for t in sample["tracks"]), default=-1)
-        for slot, cell_tracks in enumerate(sample["tracks"]):
-            tracks.append(np.where(cell_tracks >= 0, cell_tracks + offset, -1))
-            slots.append(np.full(len(cell_tracks), slot))
-        offset += count + 1
+    per_sample = len(batch[0]["views"])
+    lengths = packed["lengths"]
+    slots = torch.arange(per_sample).repeat(len(batch)).repeat_interleave(lengths)
+    sizes = torch.tensor(
+        [max(int(v["ids"].max(initial=-1)) for v in s["views"]) + 1 for s in batch]
+    )
+    starts = (sizes.cumsum(0) - sizes).repeat_interleave(per_sample)
+    keys = packed.pop("ids") + starts.repeat_interleave(lengths)
     return {
         **packed,
-        "tracks": torch.from_numpy(np.concatenate(tracks)).long(),
-        "slots": torch.from_numpy(np.concatenate(slots)).long(),
-        "track_count": offset,
+        "keys": keys,
+        "slots": slots,
         "global_views": batch[0]["global_views"],
-        "views_per_sample": len(batch[0]["views"]),
+        "views_per_sample": per_sample,
         "batch_size": len(batch),
     }
 
 
 def collate_slides(batch: list[View], block_size: int) -> Batch:
-    """Packs slide views with their nucleus and region labels."""
+    """Packs slide views with their nucleus labels."""
     return pack(batch, block_size)

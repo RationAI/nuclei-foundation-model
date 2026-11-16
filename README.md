@@ -4,9 +4,9 @@
 
 - **Views**: as in LeJEPA, 2 global views of the 3072-4096 nuclei closest to a center near a shared seed, so they overlap, and 6 local views of 512-1024 nuclei centered among the nuclei of the global views. Augmented on the polygons: rotation, flips and zoom of the view, nucleus drop, dropout holes, and for each nucleus an affine map and shape noise.
 - **Attention**: within a view, a nucleus attends to the blocks of 128 spatially sorted nuclei that hold its nearest neighbors. Block pairs within a view are full blocks of flex attention.
-- **Cells**: seeds placed by farthest point sampling, one per 64 nuclei, and each nucleus belongs to the cell of its nearest seed. The final nucleus tokens of a cell are pooled with SimPool, or with two cross-attention layers (`pooling=attention`).
-- **Objective**: LeJEPA on tracks of cells that hold the same nuclei. Cells of the two global views that are each other's best match, by a Jaccard index of at least 0.3, start a track, and a local cell joins the track whose global cells hold at least half of its nuclei. Each cell of a track predicts the mean of its global cells, and SIGReg is applied to the cells of each view slot.
-- **Probes**: online, detached probes on PANDA Radboud, one on the cell embeddings (a region is positive if at least 50 % of its nuclei are) and one on each nucleus token. Validation encodes every validation slide whole and reports AUROC, AUPRC, precision and recall for both.
+- **Cells**: clustered from the tokens. The data loader seeds cells by farthest point sampling, one per 64 nuclei, and the model refines them with SLIC on the detached final tokens and the positions: a nucleus joins the cell of its view with the least `(1 - mix) * spatial + mix * token` distance, each term scaled by its mean contrast between neighboring cells. The clustering is spatial for the first 10 % of the training, while the tokens are near random, and the mix rises to 0.5 by 30 %. The final nucleus tokens of a cell are pooled with SimPool, or with two cross-attention layers (`pooling=attention`).
+- **Objective**: LeJEPA on tracks of cells that hold the same nuclei, matched on the GPU after the clustering. Cells of the two global views that are each other's best match, by a Jaccard index of at least 0.3, start a track, and a local cell joins the track whose global cells hold at least half of its nuclei. Each cell of a track predicts the mean of its global cells, and SIGReg is applied to the cells of each view slot.
+- **Probes**: online, detached probes on PANDA Radboud, one on the cell embeddings (a cell is positive if at least 50 % of its nuclei are) and one on each nucleus token. Validation encodes every validation slide whole and reports AUROC, AUPRC, precision and recall for both.
 
 ```bash
 uv sync
@@ -20,10 +20,11 @@ uv run python scripts/view_retrieval.py augmentation=weak
 | Module | Role |
 | --- | --- |
 | `nfm/data/nuclei.py` | Contours, shape features, views |
-| `nfm/data/neighborhoods.py` | Nearest neighbors, Voronoi cells, cell tracks |
+| `nfm/data/neighborhoods.py` | Nearest neighbors and initial cells |
 | `nfm/data/augmentations.py` | Polygon augmentations |
 | `nfm/data/packing.py` | Spatial sorting and packing of views into one sequence |
 | `nfm/modeling/block_mask.py` | Neighborhood attention mask |
 | `nfm/modeling/transformer.py` | Transformer |
+| `nfm/modeling/clustering.py` | SLIC clustering of the cells and their tracks across views |
 | `nfm/modeling/pooling.py` | SimPool and attention pooling of cells |
 | `nfm/ssl_meta_arch.py` | Objectives and probes |

@@ -8,10 +8,10 @@ from nfm.data.nuclei import Descriptor, View, make_view, radial_distances
 
 
 class ClassificationNucleiDataset(Dataset[View]):
-    """Nuclei of one Radboud slide with nucleus and region labels.
+    """Nuclei of one Radboud slide with their labels.
 
-    A region is a Voronoi cell of the nuclei, and it is positive if at least 50 %
-    of its nuclei are. With `crop_nuclei`, a view is that many nuclei
+    The model clusters the nuclei into cells, and a cell is positive if at least
+    50 % of its nuclei are. With `crop_nuclei`, a view is that many nuclei
     closest to a random nucleus, for training. Without it, a view is the whole
     slide, so every nucleus is evaluated exactly once.
     """
@@ -60,11 +60,6 @@ class ClassificationNucleiDataset(Dataset[View]):
             count = min(self.crop_nuclei, len(centroids))
             _, members = cKDTree(centroids).query(center, count)
             polygons, labels = polygons[members], labels[members]
-        view = self.neighborhoods(
+        return self.neighborhoods(
             make_view(polygons, center, descriptor=self.descriptor, labels=labels)
         )
-        count = len(view["cell_seeds"])
-        positive = np.bincount(view["cells"], view["labels"], minlength=count)
-        size = np.bincount(view["cells"], minlength=count)
-        region = positive / np.maximum(size, 1) >= 0.5
-        return {**view, "cell_labels": region.astype(np.float32)}

@@ -1,7 +1,7 @@
 """How easily paired cells can be matched without learning anything.
 
-Each cell of a track is paired with the cell of its track in the first global
-view. The nuclei of each paired cell get a fingerprint: quantiles of
+The initial cells of the data loader are tracked as in training, and each cell
+of a track is paired with the cell of its track in the first global view. The nuclei of each paired cell get a fingerprint: quantiles of
 rotation and flip invariant nucleus statistics, the log mean radius and the
 relative Fourier magnitudes of the radial distances (elongation and finer
 shape). The score is the share of pairs whose first cell has its partner
@@ -16,8 +16,12 @@ import sys
 
 import numpy as np
 import pandas as pd
+import torch
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
+
+from nfm.data.packing import collate_views
+from nfm.modeling.clustering import match_tracks
 
 
 SAMPLES = 32
@@ -57,27 +61,37 @@ def main(overrides: list[str]) -> None:
     np.random.seed(0)
     samples = [dataset[i] for i in np.random.randint(len(dataset), size=SAMPLES)]
 
-    def covered(sample: dict, view: int, cell: int) -> np.ndarray:
-        view = sample["views"][view]
-        return fingerprint(view["features"][view["cells"] == cell])
-
-    def pairs(sample: dict) -> list[tuple[int, int, int, int]]:
-        anchors = sample["tracks"][0]
-        cells = {track: cell for cell, track in enumerate(anchors) if track >= 0}
+    def pairs(sample: dict) -> list[np.ndarray]:
+        """Fingerprints of each tracked cell and of its cell in the first view."""
+        packed = collate_views([sample], block_size=config.data.block_size)
+        cells, count = packed["cells"], packed["cell_count"]
+        tracks, _ = match_tracks(
+            cells,
+            count,
+            packed["keys"],
+            packed["slots"],
+            config.model.min_overlap,
+            config.model.min_share,
+        )
+        slots = torch.zeros(count, dtype=torch.long)
+        slots[cells] = packed["slots"]
+        features = packed["features"].numpy()
+        cells = cells.numpy()
+        anchors = {
+            int(tracks[c]): c for c in range(count) if slots[c] == 0 and tracks[c] >= 0
+        }
         return [
-            (0, cells[track], view, cell)
-            for view, tracks in enumerate(sample["tracks"][1:], start=1)
-            for cell, track in enumerate(tracks)
-            if track >= 0
+            np.stack(
+                [
+                    fingerprint(features[cells == anchors[int(tracks[c])]]),
+                    fingerprint(features[cells == c]),
+                ]
+            )
+            for c in range(count)
+            if slots[c] > 0 and tracks[c] >= 0
         ]
 
-    prints = np.array(
-        [
-            [covered(s, a, i), covered(s, b, j)]
-            for s in samples
-            for a, i, b, j in pairs(s)
-        ]
-    )
+    prints = np.array([pair for s in samples for pair in pairs(s)])
     flat = prints.reshape(-1, prints.shape[-1])
     prints = (prints - flat.mean(0)) / (flat.std(0) + 1e-6)
     distances = np.linalg.norm(prints[:, 0, None] - prints[None, :, 1], axis=-1)
