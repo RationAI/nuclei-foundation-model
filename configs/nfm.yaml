@@ -52,6 +52,10 @@ model:
   probe_lr: 0.001
   weight_decay: 0.05
   warmup_steps: 1000
+  # Of the nucleus LeJEPA loss, against the cell one. SIGReg grows with its
+  # samples, and a global view slot holds about 5 times more tracked nuclei than
+  # cells, so its SIGReg pushes harder at the same lamb.
+  nucleus_weight: 1.0
 
 # Neighborhoods of the attention, and the Voronoi cells pooled into regions.
 neighborhoods:
@@ -61,6 +65,9 @@ neighborhoods:
 
 data:
   block_size: ${model.backbone.block_size}
+  # Nuclei in both global views, tracked into the local views, for the nucleus
+  # objective. A sample has a few thousand, and the projector runs on each copy.
+  nucleus_tracks_per_sample: 256
   datasets:
     unlabeled:
       slides_path: ${project_path}/train_final.parquet

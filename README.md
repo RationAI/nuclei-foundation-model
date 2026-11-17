@@ -6,6 +6,7 @@
 - **Attention**: within a view, a nucleus attends to the blocks of 128 spatially sorted nuclei that hold its nearest neighbors. Block pairs within a view are full blocks of flex attention.
 - **Cells**: seeds placed by farthest point sampling, one per 64 nuclei, and each nucleus belongs to the cell of its nearest seed. The final nucleus tokens of a cell are pooled with SimPool, or with two cross-attention layers (`pooling=attention`).
 - **Objective**: LeJEPA on tracks of cells that hold the same nuclei. Cells of the two global views that are each other's best match, by a Jaccard index of at least 0.3, start a track, and a local cell joins the track whose global cells hold at least half of its nuclei. Each cell of a track predicts the mean of its global cells, and SIGReg is applied to the cells of each view slot.
+- **Nucleus objective**: LeJEPA on the nucleus tokens too, with its own projector. A nucleus in both global views starts a track, 256 drawn per sample, and its copies in the local views join it by id. Each copy predicts the mean of its global copies, and SIGReg is applied to the copies of each view slot.
 - **Probes**: online, detached probes on PANDA Radboud, one on the cell embeddings (a region is positive if at least 50 % of its nuclei are) and one on each nucleus token. Validation encodes every validation slide whole and reports AUROC, AUPRC, precision and recall for both.
 
 ```bash

@@ -33,16 +33,24 @@ def init_worker(worker_id: int) -> None:
 
 
 class DataModule(LightningDataModule):
-    def __init__(self, datasets: DictConfig, block_size: int = 128) -> None:
+    def __init__(
+        self,
+        datasets: DictConfig,
+        block_size: int = 128,
+        nucleus_tracks_per_sample: int = 256,
+    ) -> None:
         """Initializes the data module.
 
         Args:
             datasets: The unlabeled and labeled dataset configurations.
             block_size: Attention block size the views are sorted for.
+            nucleus_tracks_per_sample: Nuclei of each unlabeled sample tracked
+                across its views for the nucleus objective.
         """
         super().__init__()
         self.datasets = datasets
         self.block_size = block_size
+        self.nucleus_tracks_per_sample = nucleus_tracks_per_sample
 
     def prepare_data(self) -> None:
         for dataset in self.datasets.values():
@@ -83,7 +91,11 @@ class DataModule(LightningDataModule):
                     in_order=False,
                     multiprocessing_context="spawn",  # lance is not fork-safe
                     worker_init_fn=init_worker,
-                    collate_fn=partial(collate_views, block_size=self.block_size),
+                    collate_fn=partial(
+                        collate_views,
+                        block_size=self.block_size,
+                        nucleus_tracks_per_sample=self.nucleus_tracks_per_sample,
+                    ),
                 ),
                 "labeled": DataLoader(
                     self.train_labeled,
