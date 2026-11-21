@@ -14,7 +14,7 @@ from threadpoolctl import threadpool_limits
 from torch.utils.data import DataLoader
 
 from nfm.data.packing import Batch, collate_slides, collate_views
-from nfm.data.samplers import SourceBalancedRandomSampler
+from nfm.data.samplers import GroupBalancedRandomSampler
 
 
 def init_worker(worker_id: int) -> None:
@@ -75,7 +75,9 @@ class DataModule(LightningDataModule):
                 "unlabeled": DataLoader(
                     self.train,
                     batch_size=self.datasets.unlabeled.batch_size,
-                    sampler=SourceBalancedRandomSampler(self.train.slides.dataset),
+                    sampler=GroupBalancedRandomSampler(
+                        self.train.slides[["organ", "dataset"]]
+                    ),
                     drop_last=True,
                     num_workers=self.datasets.unlabeled.num_workers,
                     persistent_workers=True,
