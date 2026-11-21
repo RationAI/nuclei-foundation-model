@@ -121,10 +121,14 @@ class NucleiDataset(Dataset[dict[str, Any]]):
         tree = cKDTree(centroids)
         ids = np.arange(len(polygons))
 
-        def view(center: NDArray[np.float32], sizes: tuple[int, int]) -> View:
+        def crop(
+            center: NDArray[np.float32], sizes: tuple[int, int]
+        ) -> tuple[NDArray[np.float32], NDArray[np.intp]]:
             count = np.random.randint(sizes[0], sizes[1] + 1)
             _, nuclei = tree.query(center, min(count, len(centroids)))
-            nuclei = np.atleast_1d(nuclei)
+            return center, np.atleast_1d(nuclei)
+
+        def view(center: NDArray[np.float32], nuclei: NDArray[np.intp]) -> View:
             return self.neighborhoods(
                 make_view(
                     polygons[nuclei],
@@ -135,19 +139,20 @@ class NucleiDataset(Dataset[dict[str, Any]]):
                 )
             )
 
+        # All crops are chosen before any augmentation, so the local centers
+        # are among the nuclei of the global crops, whatever the views drop.
         _, near_seed = tree.query(seed, min(self.center_nuclei, len(centroids)))
         near_seed = np.atleast_1d(near_seed)
-        views = [
-            view(centroids[np.random.choice(near_seed)], self.global_nuclei)
+        crops = [
+            crop(centroids[np.random.choice(near_seed)], self.global_nuclei)
             for _ in range(self.global_views)
         ]
-        covered = np.unique(np.concatenate([v["ids"] for v in views]))
-        if len(covered) == 0:  # everything dropped
-            covered = near_seed
-        views += [
-            view(centroids[np.random.choice(covered)], self.local_nuclei)
+        covered = np.unique(np.concatenate([nuclei for _, nuclei in crops]))
+        crops += [
+            crop(centroids[np.random.choice(covered)], self.local_nuclei)
             for _ in range(self.local_views)
         ]
+        views = [view(center, nuclei) for center, nuclei in crops]
         tracks = match_tracks(
             views, self.global_views, self.min_overlap, self.min_share
         )
