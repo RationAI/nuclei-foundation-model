@@ -10,27 +10,35 @@ mode: ???
 checkpoint: null
 
 trainer:
-  max_steps: 20000
+  # Optimizer steps, each over accumulate_grad_batches batches, so 30000 steps
+  # of 4 batches see 6 times the samples of the former 20000 steps of one. The
+  # learning rate schedule and the warmup count optimizer steps too.
+  max_steps: 30000
   max_epochs: -1
+  # Averages the gradients of 4 batches of 14 samples. The invariance gradient is
+  # that of one batch of 56, but SIGReg is a statistic of each batch, so its pull
+  # stays that of a batch of 14, with the noise of a batch of 56. To match a true
+  # batch of 56, raise model.lamb to 4 * lamb / (1 - lamb + 4 * lamb) = 0.0755.
+  accumulate_grad_batches: 4
   precision: bf16-mixed
   # LeJEPA runs without clipping can collapse abruptly (arXiv:2610.39302, Fig. 7).
   gradient_clip_val: 1.0
-  log_every_n_steps: 10
-  val_check_interval: 1000
+  log_every_n_steps: 10 # optimizer steps
+  # Counts batches, not optimizer steps: every 1000 optimizer steps of 4 batches.
+  val_check_interval: 4000
   check_val_every_n_epoch: null
   num_sanity_val_steps: 0
   callbacks:
     model_checkpoint:
       _target_: lightning.pytorch.callbacks.ModelCheckpoint
-      # Keep every validation checkpoint. A limited top k writes nothing, not even
-      # last, unless the metric improves. Without a monitor the MLflow logger
-      # deletes all but the newest one.
-      save_top_k: -1
-      # The MLflow logger uploads after each save and always re-uploads last, so
-      # last would add two uploads of a copy of the newest checkpoint.
+      # Only the newest checkpoint, overwritten at each validation. Without a
+      # monitor, a top k of 1 keeps the latest save, and the name last makes the
+      # MLflow logger upload it again each time. save_last would write nothing:
+      # it only follows a top k save at the same step.
+      filename: last
+      save_top_k: 1
+      monitor: null
       save_last: false
-      monitor: validation/region/probe_loss
-      mode: min
 
 model:
   backbone:
