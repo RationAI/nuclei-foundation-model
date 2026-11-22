@@ -107,9 +107,10 @@ def nucleus_tracks(
     Returns:
         The indices of the tracked nuclei, their tracks and the number of tracks.
     """
-    shared = np.unique(ids[(slots == 0) & (ids >= 0)])  # -1 is never tracked
+    real = ids >= 0  # -1, shared by all added nuclei, is never tracked
+    shared = np.unique(ids[(slots == 0) & real])
     for slot in range(1, global_views):
-        shared = np.intersect1d(shared, ids[slots == slot], assume_unique=True)
+        shared = np.intersect1d(shared, ids[(slots == slot) & real], assume_unique=True)
     if len(shared) > count:
         shared = np.sort(np.random.choice(shared, count, replace=False))
     at = np.searchsorted(shared, ids).clip(max=max(len(shared) - 1, 0))
