@@ -31,14 +31,15 @@ trainer:
   callbacks:
     model_checkpoint:
       _target_: lightning.pytorch.callbacks.ModelCheckpoint
-      # Only the newest checkpoint, overwritten at each validation. Without a
-      # monitor, a top k of 1 keeps the latest save, and the name last makes the
-      # MLflow logger upload it again each time. save_last would write nothing:
-      # it only follows a top k save at the same step.
-      filename: last
-      save_top_k: 1
-      monitor: null
+      # Keep every validation checkpoint. A limited top k writes nothing, not even
+      # last, unless the metric improves. Without a monitor the MLflow logger
+      # deletes all but the newest one.
+      save_top_k: -1
+      # The MLflow logger uploads after each save and always re-uploads last, so
+      # last would add two uploads of a copy of the newest checkpoint.
       save_last: false
+      monitor: validation/region/probe_loss
+      mode: min
 
 model:
   backbone:
