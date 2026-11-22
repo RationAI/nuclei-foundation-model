@@ -64,8 +64,9 @@ data:
   datasets:
     unlabeled:
       slides_path: ${project_path}/train_final.parquet
-      # Samples of 2 global and 6 local views, about 9.6k tokens after drop and
-      # holes, 135k per batch, as many as 16 samples of the former 4 views.
+      # Samples of 2 global and 6 local views, about 9.7k tokens after the drops,
+      # merges and false detections, 136k per batch, as many as 16 samples of
+      # the former 4 views.
       batch_size: 14
       # A worker builds a batch in about 3 s.
       num_workers: 16
