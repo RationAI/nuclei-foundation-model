@@ -1,24 +1,65 @@
-# @package data.datasets.unlabeled.dataset.augmentation
-# Each view is zoomed, and its nuclei are moved, reshaped, rotated, stretched and
-# dropped independently, so views cannot be matched by their exact nuclei.
-_target_: nfm.data.augmentations.Compose
-transforms:
-  - _target_: nfm.data.augmentations.Affine
-    rotation: true
-    flip: true
-    scale: [0.8, 1.25]
-  - _target_: nfm.data.augmentations.Drop
-    p: 0.15
-  - _target_: nfm.data.augmentations.Holes
-    count: [1, 8]
-    size: [16.0, 64.0] # um
-    p: 0.5
-  - _target_: nfm.data.augmentations.Jitter
-    std: 1.0 # um; nearest neighbors are about 9 um apart, 6 um at the 10th percentile
-  - _target_: nfm.data.augmentations.NucleusAffine
-    rotation: 15.0 # degrees
-    scale: [0.9, 1.1] # along and across a random axis
-  - _target_: nfm.data.augmentations.ShapeNoise
-    std: 0.05
-    harmonics: 4
-    p: 1.0
+# @package data.datasets.unlabeled.dataset
+# Each view is zoomed and warped, loses regions of nuclei to a smooth random
+# field, gets the merges and false detections of a segmenter, and its
+# nuclei are moved, rescaled, reshaped, rotated and stretched, so views cannot be
+# matched by their exact nuclei. Local views lose fewer nuclei, so the tracks
+# still reach them, and the token count stays as before.
+augmentation:
+  _target_: nfm.data.augmentations.Compose
+  transforms:
+    - &affine
+      _target_: nfm.data.augmentations.Affine
+      rotation: true
+      flip: true
+      scale: [0.8, 1.25]
+    - &warp
+      _target_: nfm.data.augmentations.Warp
+      amplitude: [1.0, 4.0] # um per axis
+      scale: [50.0, 200.0] # um, so tissue strains by a few percent
+    - _target_: nfm.data.augmentations.FieldDrop
+      fraction: [0.08, 0.28]
+      scale: [15.0, 90.0] # um, from scattered clusters to whole glands
+      softness: 0.15
+    - &merge
+      _target_: nfm.data.augmentations.Merge
+      p: 0.2 # of the touching pairs
+      max_gap: 0.5 # um between the contours
+    - &false_detections
+      _target_: nfm.data.augmentations.FalseDetections
+      fraction: [0.0, 0.03]
+      scale: [0.5, 1.1] # of the nucleus copied
+      spread: 20.0 # um
+      overlapping: 0.35 # of the copies may overlap; 11% then do, as 10.5% of real detections do
+      max_overlap: 0.3 # of either nucleus's area, about the 90th percentile among overlapping real detections
+      tolerance: 0.02 # for the rest, the error of the overlap estimate
+      tries: 8
+    - &jitter
+      _target_: nfm.data.augmentations.Jitter
+      std: 1.0 # um; nearest neighbors are about 9 um apart, 6 um at the 10th percentile
+    - &shape_scale
+      _target_: nfm.data.augmentations.ShapeScale
+      scale: [0.92, 1.08] # narrow, as enlarged nuclei mark cancer
+    - &nucleus_affine
+      _target_: nfm.data.augmentations.NucleusAffine
+      rotation: 15.0 # degrees
+      scale: [0.9, 1.1] # along and across a random axis
+    - &shape_noise
+      _target_: nfm.data.augmentations.ShapeNoise
+      std: 0.05
+      harmonics: 4
+      p: 1.0
+local_augmentation:
+  _target_: nfm.data.augmentations.Compose
+  transforms:
+    - *affine
+    - *warp
+    - _target_: nfm.data.augmentations.FieldDrop
+      fraction: [0.05, 0.2]
+      scale: [15.0, 90.0]
+      softness: 0.15
+    - *merge
+    - *false_detections
+    - *jitter
+    - *shape_scale
+    - *nucleus_affine
+    - *shape_noise

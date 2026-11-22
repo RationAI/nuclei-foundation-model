@@ -39,6 +39,7 @@ class NucleiDataset(Dataset[dict[str, Any]]):
         nuclei_path: str,
         augmentation: Augmentation,
         neighborhoods: Neighborhoods,
+        local_augmentation: Augmentation | None = None,
         global_views: int = 2,
         global_nuclei: tuple[int, int] = (3072, 4096),
         local_views: int = 6,
@@ -54,8 +55,11 @@ class NucleiDataset(Dataset[dict[str, Any]]):
         Args:
             slides: Slides to sample regions from.
             nuclei_path: Root of the lance nuclei store.
-            augmentation: Applied to each view.
+            augmentation: Applied to each global view, and to each local view
+                unless `local_augmentation` is given.
             neighborhoods: Adds the nucleus neighbors and Voronoi cells to a view.
+            local_augmentation: Applied to each local view, which is small and
+                usually dropped less, so the tracks still reach it.
             global_views: Number of global views, whose cells start the tracks.
             global_nuclei: Range of the number of nuclei in a global view.
             local_views: Number of local views, whose cells join the tracks.
@@ -73,6 +77,7 @@ class NucleiDataset(Dataset[dict[str, Any]]):
         self.slides = slides.reset_index(drop=True)
         self.nuclei_path = nuclei_path
         self.augmentation = augmentation
+        self.local_augmentation = local_augmentation or augmentation
         self.neighborhoods = neighborhoods
         self.global_views = global_views
         self.global_nuclei = global_nuclei
@@ -128,12 +133,16 @@ class NucleiDataset(Dataset[dict[str, Any]]):
             _, nuclei = tree.query(center, min(count, len(centroids)))
             return center, np.atleast_1d(nuclei)
 
-        def view(center: NDArray[np.float32], nuclei: NDArray[np.intp]) -> View:
+        def view(
+            center: NDArray[np.float32],
+            nuclei: NDArray[np.intp],
+            augmentation: Augmentation,
+        ) -> View:
             return self.neighborhoods(
                 make_view(
                     polygons[nuclei],
                     center,
-                    self.augmentation,
+                    augmentation,
                     self.descriptor,
                     ids=ids[nuclei],
                 )
@@ -152,7 +161,14 @@ class NucleiDataset(Dataset[dict[str, Any]]):
             crop(centroids[np.random.choice(covered)], self.local_nuclei)
             for _ in range(self.local_views)
         ]
-        views = [view(center, nuclei) for center, nuclei in crops]
+        views = [
+            view(
+                center,
+                nuclei,
+                self.augmentation if i < self.global_views else self.local_augmentation,
+            )
+            for i, (center, nuclei) in enumerate(crops)
+        ]
         tracks = match_tracks(
             views, self.global_views, self.min_overlap, self.min_share
         )

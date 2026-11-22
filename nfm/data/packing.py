@@ -98,7 +98,8 @@ def nucleus_tracks(
     at random, and its copies in the local views join it.
 
     Args:
-        ids: Id of each nucleus of the sample, the same in every view, [nuclei].
+        ids: Id of each nucleus of the sample, the same in every view, or -1
+            for nuclei added by the augmentations, [nuclei].
         slots: View of each nucleus within the sample, global views first.
         global_views: Number of global views.
         count: Most tracks to draw.
@@ -106,7 +107,7 @@ def nucleus_tracks(
     Returns:
         The indices of the tracked nuclei, their tracks and the number of tracks.
     """
-    shared = np.unique(ids[slots == 0])
+    shared = np.unique(ids[(slots == 0) & (ids >= 0)])  # -1 is never tracked
     for slot in range(1, global_views):
         shared = np.intersect1d(shared, ids[slots == slot], assume_unique=True)
     if len(shared) > count:

@@ -64,9 +64,13 @@ class Neighborhoods:
 
 
 def _members(view: View, size: int) -> NDArray[np.float32]:
-    """Membership of the nucleus ids in the cells of a view, [cells, size]."""
+    """Membership of the nucleus ids in the cells of a view, [cells, size].
+
+    Nuclei with id -1, added by the augmentations, belong to no track.
+    """
     members = np.zeros((len(view["cell_seeds"]), size), dtype=np.float32)
-    members[view["cells"], view["ids"]] = 1
+    real = view["ids"] >= 0
+    members[view["cells"][real], view["ids"][real]] = 1
     return members
 
 
